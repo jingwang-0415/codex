@@ -44,6 +44,7 @@
 | 异常与约束设计 | 提升接口稳定性 | 规范对象不存在、对象已存在、参数非法、并发冲突、底层 Catalog 异常等错误码 |
 | 权限与审计设计 | 满足安全合规要求 | 针对命名空间与表对象进行鉴权，并记录操作审计 |
 | 可测试性与兼容性设计 | 便于回归与扩展 | 将服务层与 Iceberg 适配层解耦，便于 Mock、集成测试与 Catalog 类型适配 |
+| 设计模式应用 | 提升扩展性与可维护性 | 通过适配器、策略、门面与模板化编排模式控制接口兼容、能力收敛和后续演进成本 |
 
 ## 4. 开发视图
 
@@ -57,6 +58,13 @@
 3. Domain 模型层：负责 table 标识、请求模型、响应模型、错误模型等领域对象定义。
 4. Iceberg 访问适配层：封装对 Iceberg Catalog 的访问动作，包括 create/load/list/update/drop 等操作。
 5. 基础设施层：提供鉴权、日志、指标、链路追踪、配置管理等横切能力。
+
+从设计模式角度看，本方案在实现模型中主要采用以下模式：
+
+1. 适配器模式：`IcebergCatalogGateway`/`IcebergCatalogGatewayImpl` 负责把服务内部调用抽象适配到 Iceberg Catalog 或不同底层实现，隔离第三方 API 变化。
+2. 门面模式：`TableApplicationService` 对 Controller 暴露统一的 table 生命周期能力入口，屏蔽鉴权、审计、并发控制和 Catalog 访问细节。
+3. 策略模式：表更新中的 update 校验与执行按 `action` 维度预留策略扩展点；当前仅启用 `AddSchemaUpdateStrategy`，后续可平滑扩展更多官方 update 类型。
+4. 模板化编排模式：创建、更新、删除等写操作遵循“校验 -> 鉴权 -> 读取/提交 -> 审计/指标”的统一处理骨架，降低流程分支散落风险。
 
 #### 4.1.2 上下文视图
 ```plantuml
@@ -165,6 +173,51 @@ TableApplicationService --> TableIdentifier
 TableApplicationService --> TableDefinition
 @enduml
 ```
+
+#### 4.1.5 设计模式应用
+本方案中设计模式的落地方式如下：
+
+| 模式 | 落地位置 | 解决问题 | 当前体现 |
+|------|----------|----------|----------|
+| 适配器模式 | `IcebergCatalogGateway` | 隔离 Iceberg Catalog 访问细节与不同底层实现差异 | Controller/Service 不直接依赖第三方 Catalog API |
+| 门面模式 | `TableApplicationService` | 对外提供统一业务入口，降低上层接入复杂度 | 对 Controller 统一暴露 create/load/list/update/drop 能力 |
+| 策略模式 | Update 校验与执行组件 | 控制不同 `TableUpdate.action` 的差异化处理逻辑 | 当前仅支持 `AddSchemaUpdate`，后续可扩展 `SetPropertiesUpdate` 等策略 |
+| 模板化编排模式 | 写操作处理主流程 | 保证校验、鉴权、提交、审计等步骤顺序一致 | create/update/drop 的算法流程结构保持一致 |
+
+模式关系图如下：
+
+```plantuml
+@startuml
+class TableController
+class TableApplicationService
+interface IcebergCatalogGateway
+class IcebergCatalogGatewayImpl
+interface TableUpdateStrategy {
+  +supports(action)
+  +validate(request)
+  +execute(identifier, request)
+}
+class AddSchemaUpdateStrategy
+class AuditService
+class AuthorizationService
+
+TableController --> TableApplicationService : 门面调用
+TableApplicationService --> AuthorizationService : 模板化编排
+TableApplicationService --> AuditService : 模板化编排
+TableApplicationService --> IcebergCatalogGateway : 适配器调用
+IcebergCatalogGatewayImpl ..|> IcebergCatalogGateway
+TableApplicationService --> TableUpdateStrategy : 策略选择
+AddSchemaUpdateStrategy ..|> TableUpdateStrategy
+AddSchemaUpdateStrategy --> IcebergCatalogGateway : 提交 AddSchemaUpdate
+@enduml
+```
+
+设计模式约束说明如下：
+
+1. Controller 不直接调用 Iceberg SDK 或 Catalog API，必须经由 `TableApplicationService` 与 `IcebergCatalogGateway`。
+2. 新增 update 能力时，优先通过新增策略实现扩展，不直接在 `TableApplicationService.updateTable` 中堆叠分支。
+3. 公共处理步骤如鉴权、审计、错误映射应保留在模板化编排主流程中，避免下沉到各个具体策略内重复实现。
+4. 若未来接入多种 Catalog 实现，应继续通过 Gateway 适配层承接，而非在业务层增加实现分叉。
 
 接口设计：描述实现单元内部和外部的接口。
 
