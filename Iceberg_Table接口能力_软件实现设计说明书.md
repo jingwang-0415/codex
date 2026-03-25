@@ -647,6 +647,86 @@ CommitTableRequest --> TableIdentifier
 | `CommitTableRequest.requirements` | commit assertions | 并发断言与前置要求 |
 | `CommitTableRequest.updates` | table updates | metadata 更新动作，当前仅支持 `AddSchemaUpdate` |
 
+ER 关系图如下：
+
+```plantuml
+@startuml
+entity "Namespace" as namespace {
+  * namespace_path : string[]
+}
+
+entity "Table" as table {
+  * table_name : string
+  --
+  metadata_location : string
+  table_uuid : string
+  location : string
+  format_version : int
+  current_schema_id : int
+  default_spec_id : int
+  default_sort_order_id : int
+}
+
+entity "Schema" as schema {
+  * schema_id : int
+  --
+  identifier_field_ids : int[]
+}
+
+entity "Field" as field {
+  * field_id : int
+  --
+  name : string
+  type : string
+  required : boolean
+}
+
+entity "PartitionSpec" as spec {
+  * spec_id : int
+}
+
+entity "PartitionField" as partition_field {
+  * field_id : int
+  --
+  source_id : int
+  name : string
+  transform : string
+}
+
+entity "SortOrder" as sort_order {
+  * order_id : int
+}
+
+entity "SortField" as sort_field {
+  * source_id : int
+  --
+  transform : string
+  direction : string
+  null_order : string
+}
+
+entity "Property" as property {
+  * prop_key : string
+  --
+  prop_value : string
+}
+
+namespace ||--o{ table : contains
+table ||--o{ schema : owns
+schema ||--o{ field : defines
+table ||--o{ spec : uses
+spec ||--o{ partition_field : defines
+table ||--o{ sort_order : uses
+sort_order ||--o{ sort_field : defines
+table ||--o{ property : has
+table }o--|| schema : current_schema_id
+table }o--|| spec : default_spec_id
+table }o--|| sort_order : default_sort_order_id
+partition_field }o--|| field : source_id
+sort_field }o--|| field : source_id
+@enduml
+```
+
 ### 4.4 算法设计
 
 #### 4.4.1 设计目标
@@ -809,6 +889,35 @@ Controller --> Client : 200
 @enduml
 ```
 
+创建表流程图：
+
+```plantuml
+@startuml
+start
+:接收 createTable 请求;
+:校验 namespace 与请求体;
+if (鉴权通过?) then (是)
+  :检查表是否已存在;
+  if (已存在?) then (是)
+    :返回 409 ErrorModel;
+    stop
+  else (否)
+    :调用 Iceberg createTable;
+    if (stage-create=true?) then (是)
+      :返回 staged LoadTableResult;
+    else (否)
+      :返回 committed LoadTableResult;
+    endif
+    :记录审计与指标;
+    stop
+  endif
+else (否)
+  :返回 403 ErrorModel;
+  stop
+endif
+@enduml
+```
+
 查询详情交互模型：
 
 ```plantuml
@@ -830,6 +939,30 @@ Catalog --> Gateway : metadata
 Gateway --> Service : tableDetail
 Service --> Controller : response
 Controller --> Client : 200
+@enduml
+```
+
+查询详情流程图：
+
+```plantuml
+@startuml
+start
+:接收 loadTable 请求;
+:解析 namespace/table/snapshots;
+if (鉴权通过?) then (是)
+  :调用 Iceberg loadTable;
+  if (表存在?) then (是)
+    :组装 LoadTableResult;
+    :返回 200;
+    stop
+  else (否)
+    :返回 404 ErrorModel;
+    stop
+  endif
+else (否)
+  :返回 403 ErrorModel;
+  stop
+endif
 @enduml
 ```
 
@@ -858,6 +991,42 @@ Controller --> Client : 200/409
 @enduml
 ```
 
+更新表流程图：
+
+```plantuml
+@startuml
+start
+:接收 updateTable 请求;
+:校验 CommitTableRequest;
+if (鉴权通过?) then (是)
+  :加载当前表 metadata;
+  if (表存在?) then (是)
+    :校验 updates 数量;
+    if (仅包含一个 AddSchemaUpdate?) then (是)
+      :校验 requirements;
+      :提交 commitTable;
+      if (提交成功?) then (是)
+        :返回 CommitTableResponse;
+        stop
+      else (否)
+        :返回 409 ErrorModel;
+        stop
+      endif
+    else (否)
+      :返回 400 ErrorModel;
+      stop
+    endif
+  else (否)
+    :返回 404 ErrorModel;
+    stop
+  endif
+else (否)
+  :返回 403 ErrorModel;
+  stop
+endif
+@enduml
+```
+
 删除表交互模型：
 
 ```plantuml
@@ -880,6 +1049,35 @@ Catalog --> Gateway : success/not_found
 Gateway --> Service : result
 Service --> Controller : response
 Controller --> Client : 204/404
+@enduml
+```
+
+删除表流程图：
+
+```plantuml
+@startuml
+start
+:接收 dropTable 请求;
+:解析 purgeRequested;
+if (鉴权通过?) then (是)
+  :执行受保护表校验;
+  if (允许删除?) then (是)
+    :调用 Iceberg dropTable;
+    if (表存在?) then (是)
+      :返回 204;
+      stop
+    else (否)
+      :返回 404 ErrorModel;
+      stop
+    endif
+  else (否)
+    :返回 403 ErrorModel;
+    stop
+  endif
+else (否)
+  :返回 403 ErrorModel;
+  stop
+endif
 @enduml
 ```
 
