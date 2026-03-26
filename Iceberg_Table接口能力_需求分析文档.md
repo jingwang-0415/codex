@@ -15,48 +15,71 @@
 本次需求的核心出发点不是重新定义一套自有表接口协议，而是在 Iceberg 官方 REST 契约基础上，补齐企业级控制面所需的统一入口与治理能力，使上层系统能够以较低成本、安全、稳定地接入表管理能力。
 
 ### 1.2 UC设计
-本需求面向的典型参与角色包括数据平台调用方、平台控制台、平台运维/管理员以及统一治理组件。典型使用场景集中在表创建、表查询、表更新、表删除和存在性检查五类核心动作。
+本需求的外部使用用户统一定义为“平台调用方”。平台调用方通过统一接口访问表级元数据能力，既包含正常访问场景，也包含参数非法、对象不存在、并发冲突、权限不足等异常访问场景。
 
 用例清单如下：
 
 | 用例名称 | 参与角色 | 触发条件 | 前置条件 | 主流程 | 异常流程 | 输出结果 |
 |----------|----------|----------|----------|--------|----------|----------|
-| 创建表 | 上层业务系统、控制台用户 | 需要在指定 namespace 下新增 Iceberg 表 | 已具备目标 namespace 权限，输入 schema 合法 | 提交建表请求、服务校验参数与权限、调用 Catalog 建表、记录审计、返回建表结果 | 表已存在、schema 非法、无权限、底层 Catalog 异常 | 返回 `LoadTableResult` 或标准错误 |
-| 查询表列表 | 上层业务系统、控制台用户 | 需要查看 namespace 下的表清单 | namespace 存在且具备读取权限 | 请求列表、服务鉴权、查询 Catalog、返回 identifiers | namespace 不存在、无权限、底层异常 | 返回 `ListTablesResponse` |
-| 查询表详情 | 上层业务系统、控制台用户 | 需要加载表 metadata 详情 | 目标表存在且具备读取权限 | 请求详情、服务鉴权、查询表 metadata、返回标准结果 | 表不存在、无权限、底层异常 | 返回 `LoadTableResult` |
-| 提交表更新 | 平台管理员、治理系统 | 需要执行 schema 增量更新 | 目标表存在，更新请求满足并发断言和当前版本支持范围 | 提交 `CommitTableRequest`、服务校验与鉴权、提交更新、记录审计 | 断言失败、action 不支持、无权限、提交冲突 | 返回 `CommitTableResponse` 或标准错误 |
-| 删除表 | 平台管理员、治理系统 | 需要下线或清理表 | 目标表存在，操作者具备删除权限 | 提交删除请求、服务校验与鉴权、执行删除、记录审计 | 表不存在、受保护表、无权限、底层异常 | 返回 `204 No Content` |
-| 检查表存在性 | 上层业务系统、平台控制台 | 需快速探测目标表是否存在 | 已具备基础访问权限 | 调用 `HEAD` 接口、服务鉴权、返回存在性状态 | 表不存在、无权限 | 返回 `204` 或 `404` |
+| 创建表 | 平台调用方 | 需要在指定 namespace 下新增 Iceberg 表 | 已具备目标 namespace 权限，输入 schema 合法 | 提交建表请求、服务校验参数与权限、调用 Catalog 建表、记录审计、返回建表结果 | 表已存在、schema 非法、无权限、底层 Catalog 异常 | 返回 `LoadTableResult` 或标准错误 |
+| 查询表列表 | 平台调用方 | 需要查看 namespace 下的表清单 | namespace 存在且具备读取权限 | 请求列表、服务鉴权、查询 Catalog、返回 identifiers | namespace 不存在、无权限、底层异常 | 返回 `ListTablesResponse` |
+| 查询表详情 | 平台调用方 | 需要加载表 metadata 详情 | 目标表存在且具备读取权限 | 请求详情、服务鉴权、查询表 metadata、返回标准结果 | 表不存在、无权限、底层异常 | 返回 `LoadTableResult` |
+| 提交表更新 | 平台调用方 | 需要执行 schema 增量更新 | 目标表存在，更新请求满足并发断言和当前版本支持范围 | 提交 `CommitTableRequest`、服务校验与鉴权、提交更新、记录审计 | 断言失败、action 不支持、无权限、提交冲突 | 返回 `CommitTableResponse` 或标准错误 |
+| 删除表 | 平台调用方 | 需要下线或清理表 | 目标表存在，操作者具备删除权限 | 提交删除请求、服务校验与鉴权、执行删除、记录审计 | 表不存在、受保护表、无权限、底层异常 | 返回 `204 No Content` |
+| 检查表存在性 | 平台调用方 | 需快速探测目标表是否存在 | 已具备基础访问权限 | 调用 `HEAD` 接口、服务鉴权、返回存在性状态 | 表不存在、无权限 | 返回 `204` 或 `404` |
 
-用例关系图如下：
+用例关系图如下，覆盖正常场景与异常场景：
 
 ```plantuml
 @startuml
 left to right direction
 actor "平台调用方" as Client
-actor "平台管理员" as Admin
-actor "治理组件" as Gov
 
 rectangle "Table接口服务" {
-  usecase "创建表" as UC1
-  usecase "查询表列表" as UC2
-  usecase "查询表详情" as UC3
-  usecase "提交表更新" as UC4
-  usecase "删除表" as UC5
-  usecase "检查表存在性" as UC6
+  package "正常场景" {
+    usecase "创建表" as UC1
+    usecase "查询表列表" as UC2
+    usecase "查询表详情" as UC3
+    usecase "提交表更新" as UC4
+    usecase "删除表" as UC5
+    usecase "检查表存在性" as UC6
+  }
+
+  package "异常场景" {
+    usecase "参数校验失败" as EX1
+    usecase "对象不存在" as EX2
+    usecase "对象已存在" as EX3
+    usecase "权限不足" as EX4
+    usecase "提交冲突" as EX5
+    usecase "底层Catalog异常" as EX6
+  }
 }
 
 Client --> UC1
 Client --> UC2
 Client --> UC3
+Client --> UC4
+Client --> UC5
 Client --> UC6
-Admin --> UC3
-Admin --> UC4
-Admin --> UC5
-Gov --> UC4
-Gov --> UC5
-UC1 --> UC3
-UC4 --> UC3
+UC1 ..> EX1 : <<extend>>
+UC1 ..> EX3 : <<extend>>
+UC1 ..> EX4 : <<extend>>
+UC1 ..> EX6 : <<extend>>
+UC2 ..> EX2 : <<extend>>
+UC2 ..> EX4 : <<extend>>
+UC2 ..> EX6 : <<extend>>
+UC3 ..> EX2 : <<extend>>
+UC3 ..> EX4 : <<extend>>
+UC3 ..> EX6 : <<extend>>
+UC4 ..> EX1 : <<extend>>
+UC4 ..> EX4 : <<extend>>
+UC4 ..> EX5 : <<extend>>
+UC4 ..> EX6 : <<extend>>
+UC5 ..> EX2 : <<extend>>
+UC5 ..> EX4 : <<extend>>
+UC5 ..> EX6 : <<extend>>
+UC6 ..> EX2 : <<extend>>
+UC6 ..> EX4 : <<extend>>
 @enduml
 ```
 
@@ -101,44 +124,85 @@ UC4 --> UC3
 ## 2. 方案详设
 
 ### 2.1 现状描述
-当前在数据平台场景中，表元数据管理通常存在三类现状模式：
+当前在现有开发模式下，接口能力主要基于 Gravitino 协议开展建设，并围绕三层资源结构组织：
 
-1. 调用方直接对接底层 Catalog 或 SDK。
-2. 不同系统围绕建表、查表和删表能力各自封装私有接口。
-3. 部分治理能力由外围中间件或网关承担，但缺少统一语义层。
+1. Catalog：作为顶层资源，负责承载元数据管理入口与资源域划分。
+2. Schema：作为 Catalog 下的二级资源，用于组织命名空间或逻辑数据库层级。
+3. Table：作为 Schema 下的三级资源，承接具体表对象的创建、查询、更新和删除能力。
 
-上述模式在早期能够满足局部需求，但随着上层系统数量增加和 Iceberg 能力逐步丰富，暴露出明显问题：
+基于该协议进行开发在早期能够满足基础元数据管理诉求，但在面向 Iceberg Table 控制面能力建设时，逐步暴露出如下问题：
 
 | 当前环节 | 现有处理方式 | 存在问题 |
 |----------|--------------|----------|
-| 表创建 | 调用方直接封装 Catalog/SDK 调用 | 参数模型不统一，错误处理分散 |
-| 表查询 | 不同系统各自定义详情与列表接口 | 返回字段和语义不一致，复用性差 |
-| 表更新 | 上层系统自行理解 metadata 更新规则 | 容易误用并发断言与 schema 更新规则 |
-| 删除治理 | 删除策略散落在不同服务 | 缺少受保护表拦截与统一审计 |
-| 权限与审计 | 依赖外围能力或局部实现 | 难以形成对象级统一治理闭环 |
+| Catalog 层 | 基于 Gravitino 协议暴露顶层资源入口 | 更偏资源分层管理，缺少直接面向 Iceberg REST Catalog 的标准外部契约 |
+| Schema 层 | 通过中间层组织 namespace/逻辑库 | 资源层次清晰，但对 Iceberg 官方 namespace 语义存在二次映射成本 |
+| Table 层 | 在三层结构下扩展表对象能力 | 容易引入私有路径、私有字段和行为差异，影响生态兼容 |
+| 异常处理 | 各层分别处理校验和错误返回 | 错误码、异常语义和调用方感知不够统一 |
+| 治理能力 | 权限、审计、监控依附于分层实现 | 难以以 Iceberg Table 对象为中心收口治理能力 |
 
 现状流程可抽象如下：
 
 ```plantuml
 @startuml
 start
-:调用方识别目标 Catalog/实现类型;
-:自行组装请求参数与底层 SDK 调用;
-:处理不同实现返回体和异常;
-if (是否涉及写操作?) then (是)
-  :调用方自行处理并发断言/重复请求;
-  :分别接入权限、审计或日志能力;
-else (否)
-  :返回局部查询结果;
+:平台调用方按 Gravitino 协议访问 Catalog 入口;
+:进入 Schema 资源层定位命名空间;
+:进入 Table 资源层执行对象操作;
+:分别适配参数、路径与返回模型;
+if (是否满足 Iceberg 标准语义?) then (否)
+  :增加协议映射与语义转换逻辑;
+  :分别处理校验、异常和治理能力;
+else (是)
+  :返回当前协议下的处理结果;
 endif
-:不同系统维护各自封装逻辑;
+:形成 Catalog -> Schema -> Table 三层开发结构;
 stop
 @enduml
 ```
 
-因此，需要在控制面建设统一的 Table 接口服务，将外部能力标准化、内部实现解耦化、治理能力平台化。
+因此，需要在保留当前资源组织思路可借鉴部分的基础上，建设更贴近 Iceberg REST Catalog 标准的统一 Table 接口服务，将外部能力标准化、内部实现解耦化、治理能力平台化。
 
-### 2.2 竞品分析
+### 2.2 Gravitino 三层模型到 Iceberg REST 模型的映射关系
+当前现状以 Gravitino 协议的 `Catalog -> Schema -> Table` 三层资源组织能力，而目标方案更强调与 Iceberg REST Catalog 官方协议直接对齐。两者并非完全一一等价，但可以建立如下映射关系，用于指导后续接口改造和适配层设计。
+
+映射关系如下：
+
+| Gravitino 模型层级 | 当前含义 | Iceberg REST 对应概念 | 映射说明 |
+|--------------------|----------|-----------------------|----------|
+| Catalog | 顶层资源域、元数据管理入口 | `{prefix}` + catalog configuration | Iceberg REST 中更偏向路由前缀和 catalog 配置入口，不直接作为业务资源对象暴露 |
+| Schema | Catalog 下的逻辑库/命名空间层 | `namespace` | 是最核心的概念映射，Schema 需要尽量收敛到 Iceberg 官方 namespace 语义 |
+| Table | Schema 下的表对象 | `table` | 二者最接近，但外部路径、请求体、返回体需要以 Iceberg 官方 table 资源模型为准 |
+
+进一步说明如下：
+- Gravitino 的 Catalog 层在当前实现中承担资源域划分和入口定位职责，而在 Iceberg REST 中更常通过 `prefix` 路由、`/v1/config` 配置协商以及服务端 catalog 实现来体现，因此不建议继续将 Catalog 作为对外强语义业务资源暴露。
+- Gravitino 的 Schema 层与 Iceberg 的 namespace 最接近，但需要避免再包装出额外的私有层级语义，尤其是多级 namespace 编码、属性管理和路径映射应优先遵循官方规范。
+- Gravitino 的 Table 层与 Iceberg table 资源直接相关，但其路径、更新动作、错误模型和返回结构必须切换到 Iceberg REST Catalog 的标准契约。
+
+映射关系图如下：
+
+```plantuml
+@startuml
+left to right direction
+
+rectangle "Gravitino三层模型" {
+  component "Catalog" as GCatalog
+  component "Schema" as GSchema
+  component "Table" as GTable
+}
+
+rectangle "Iceberg REST模型" {
+  component "prefix/config" as IPrefix
+  component "namespace" as INamespace
+  component "table" as ITable
+}
+
+GCatalog --> IPrefix : 路由入口/配置映射
+GSchema --> INamespace : 命名空间映射
+GTable --> ITable : 表资源映射
+@enduml
+```
+
+### 2.3 竞品分析
 本次需求的竞品分析不以“完全同类产品替代”为目标，而是围绕“统一 Table Catalog/API 能力”的设计方向，选取具有代表性的官方实现或产品能力进行对比，包括 Apache Polaris、AWS Glue Iceberg REST Endpoint 和 Databricks Unity Catalog Iceberg REST Endpoint。
 
 竞品对比如下：
@@ -159,10 +223,10 @@ stop
 - 内部应预留基于命名空间和表对象的权限扩展点。
 - 应明确哪些能力是标准协议内的，哪些能力是平台治理增强能力，避免二者混杂在外部契约中。
 
-### 2.3 详细设计
+### 2.4 详细设计
 本节从 Iceberg 接口分析、业务流程、功能模块、权限治理和非功能要求几个方面展开。
 
-#### 2.3.1 Iceberg接口分析
+#### 2.4.1 Iceberg接口分析
 结合 Apache Iceberg 官方 REST Catalog 规范与现有软件实现设计说明书，本需求的接口设计遵循“外部强兼容、内部可适配、治理可增强”的原则。
 
 核心接口范围如下：
@@ -182,6 +246,29 @@ stop
 - `requirements` 是接口层必须显式尊重的并发保护机制，本方案不应绕过这一层语义。
 - `namespace`、`table`、`prefix` 等路径层级需要兼容官方模型，但允许在内部映射至具体 Catalog 实现或平台路由。
 - 错误模型以官方 `ErrorModel` 为主，同时在服务内部补充统一日志、监控与审计字段。
+
+本期不支持但属于 Iceberg REST 官方能力范围的接口如下：
+
+| 接口类别 | 方法/路径 | 官方能力说明 | 本期不支持原因 |
+|----------|-----------|--------------|----------------|
+| Catalog 配置 | `GET /v1/config` | 返回 catalog 配置、默认项、覆盖项及可选 endpoints 信息 | 当前需求聚焦 Table 控制面核心能力，不单独开放配置协商接口 |
+| Namespace 管理 | `GET /v1/{prefix}/namespaces` | 列举 namespace | 当前不建设完整 namespace 管理面，避免扩大范围 |
+| Namespace 管理 | `POST /v1/{prefix}/namespaces` | 创建 namespace | 本期范围聚焦表级能力，不纳入命名空间生命周期管理 |
+| Namespace 管理 | `HEAD /v1/{prefix}/namespaces/{namespace}` | 检查 namespace 是否存在 | 现阶段优先由底层能力承接，不对外单独提供 |
+| Namespace 管理 | `GET /v1/{prefix}/namespaces/{namespace}` | 读取 namespace 元数据 | 不作为本期控制面重点 |
+| Namespace 管理 | `DELETE /v1/{prefix}/namespaces/{namespace}` | 删除 namespace | 删除 namespace 风险高，且与表级治理边界不同 |
+| Namespace 属性 | `POST /v1/{prefix}/namespaces/{namespace}/properties` | 更新 namespace 属性 | 本期不做 namespace 属性治理 |
+| 表注册 | `POST /v1/{prefix}/namespaces/{namespace}/register` | 使用已有 metadata 文件注册表 | 首版优先支持标准建表，不支持 metadata register 场景 |
+| 表重命名 | `POST /v1/{prefix}/tables/rename` | 重命名表 | 涉及对象标识变更、权限和引用影响，本期暂不纳入 |
+| Metrics 上报 | `POST /v1/{prefix}/namespaces/{namespace}/tables/{table}/metrics` | 上报表级 metrics 报告 | 本期可观测性重点在服务端指标，不开放客户端 metrics 上报接口 |
+| 多表事务提交 | `POST /v1/{prefix}/transactions/commit` | 多表原子提交 | 实现复杂度高，超出当前单表控制面目标范围 |
+| View 管理 | `GET/HEAD/POST/DELETE /v1/{prefix}/namespaces/{namespace}/views...` | 视图列表、创建、加载、更新、删除 | 当前仅聚焦 Table，不建设 View 生命周期能力 |
+| View 重命名 | `POST /v1/{prefix}/views/rename` | 重命名视图 | 当前不支持 View，因此不支持其重命名接口 |
+
+边界说明：
+- 上述接口均属于 Iceberg REST Catalog 规范中已存在或可选支持的能力，但不在当前版本交付范围内。
+- 本期实现重点仍是“单表生命周期管理 + 基础治理能力”，避免因引入 namespace、view、transaction 等能力导致范围失控。
+- 后续若扩展相关接口，应继续优先复用官方路径、请求体和错误模型，不单独设计私有契约。
 
 Iceberg 接口分析流程如下：
 
@@ -208,7 +295,7 @@ stop
 @enduml
 ```
 
-#### 2.3.2 功能模块设计
+#### 2.4.2 功能模块设计
 建议将能力拆分为以下模块：
 
 | 模块 | 功能点 | 设计说明 | 备注 |
@@ -220,7 +307,7 @@ stop
 | 幂等与一致性模块 | 防重复、并发断言检查 | 为写操作提供重复请求治理和冲突处理 | 不改变官方外部契约 |
 | 可观测模块 | 指标、日志、链路追踪、告警 | 支撑运维与问题定位 | 需覆盖成功与失败路径 |
 
-#### 2.3.3 角色权限设计
+#### 2.4.3 角色权限设计
 权限设计建议采用“命名空间 + 表对象 + 操作类型”的组合控制模型。
 
 | 角色/主体 | 允许动作 | 说明 |
@@ -234,7 +321,7 @@ stop
 - table 级别读、更新、删除权限。
 - 高风险操作如删除表、purge、schema 更新需要更严格的权限控制和审计留痕。
 
-#### 2.3.4 异常与边界设计
+#### 2.4.4 异常与边界设计
 典型异常场景如下：
 
 | 场景 | 处理原则 |
@@ -252,7 +339,7 @@ stop
 - 不提供自定义列表分页与筛选能力，避免偏离官方契约。
 - 写操作必须在审计、权限和一致性控制链路通过后才能进入底层 Catalog。
 
-#### 2.3.5 非功能设计
+#### 2.4.5 非功能设计
 本需求除业务能力外，还需满足以下非功能要求：
 
 | 类别 | 要求 |
@@ -326,9 +413,14 @@ API --> Client: 输出结果
 - [Apache Iceberg - REST Catalog Spec](https://iceberg.apache.org/rest-catalog-spec/)
 - [Apache Iceberg OpenAPI YAML - rest-catalog-open-api.yaml](https://github.com/apache/iceberg/blob/main/open-api/rest-catalog-open-api.yaml)
 
+#### Gravitino相关介绍链接
+- [Apache Gravitino 官方首页](https://gravitino.apache.org/)
+- [Apache Gravitino 官方概览文档](https://gravitino.apache.org/docs/latest/)
+- [Apache Gravitino GitHub 仓库](https://github.com/apache/gravitino)
+- [Apache Gravitino Lance REST Service 文档（包含 catalog -> schema -> table 三层层级说明）](https://gravitino.apache.org/docs/1.1.0/lance-rest-service/)
+
 ### 版本记录
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
 | v1.0 | 2026-03-25 | 基于现有软件实现设计说明书与官方资料整理首版需求分析文档 |
-
