@@ -43,21 +43,105 @@
 | Iceberg 元数据映射设计 | 对齐底层语义 | 明确 table 标识、Schema 摘要、分区信息、属性信息与 Iceberg metadata 的映射关系 |
 | 异常与约束设计 | 提升接口稳定性 | 规范对象不存在、对象已存在、参数非法、并发冲突、底层 Catalog 异常等错误码 |
 | 权限与审计设计 | 满足安全合规要求 | 针对命名空间与表对象进行鉴权，并记录操作审计 |
+| 跨系统一致性设计 | 保证多系统状态收敛 | 对 Iceberg、DME、OpenSearch、Local 的顺序写入采用补偿事务机制，任一步失败均触发反向回滚 |
 | 可测试性与兼容性设计 | 便于回归与扩展 | 将服务层与 Iceberg 适配层解耦，便于 Mock、集成测试与 Catalog 类型适配 |
 | 设计模式应用 | 提升扩展性与可维护性 | 通过适配器、策略、门面与模板化编排模式控制接口兼容、能力收敛和后续演进成本 |
+
+### 3.3 一致性保障设计简述
+本方案涉及 Iceberg、DME、OpenSearch、Local 四个系统的串行写入，无法依赖单机事务或分布式强事务一次性提交，因此采用 `事务协调器 + Saga 补偿事务` 的方式保证最终一致性。整体原则如下：
+
+1. Iceberg 作为主状态源，写操作先落 Iceberg，再同步 DME、OpenSearch、Local。
+2. 每完成一步，都在事务上下文中记录当前步骤状态和补偿参数。
+3. 后续任一步失败时，立即停止向后执行，并按 `Local -> OpenSearch -> DME -> Iceberg` 的逆序执行补偿回滚。
+4. 若补偿过程中仍有失败，则将事务标记为待修复状态，并保留 `sagaId`、失败步骤、补偿结果供自动重试或人工处理。
+
+一致性保障流程图如下：
+
+```plantuml
+@startuml
+start
+:接收写请求;
+:校验参数与权限;
+:创建 saga 上下文;
+:执行 Iceberg 写入;
+if (Iceberg 成功?) then (是)
+  :记录 Iceberg 补偿信息;
+  :执行 DME 写入;
+  if (DME 成功?) then (是)
+    :记录 DME 补偿信息;
+    :执行 OpenSearch 写入;
+    if (OpenSearch 成功?) then (是)
+      :记录 OpenSearch 补偿信息;
+      :执行 Local 调用;
+      if (Local 成功?) then (是)
+        :标记事务成功;
+        stop
+      else (否)
+        :逆序补偿 Local前已完成步骤;
+        :标记事务失败/待修复;
+        stop
+      endif
+    else (否)
+      :逆序补偿 OpenSearch前已完成步骤;
+      :标记事务失败/待修复;
+      stop
+    endif
+  else (否)
+    :逆序补偿 DME前已完成步骤;
+    :标记事务失败/待修复;
+    stop
+  endif
+else (否)
+  :直接返回失败;
+  stop
+endif
+@enduml
+```
+
+一致性保障时序图如下：
+
+```plantuml
+@startuml
+actor Client
+participant Service
+participant TX as TransactionCoordinator
+participant Iceberg
+participant DME
+participant OS as OpenSearch
+participant Local
+
+Client -> Service : 写请求
+Service -> TX : execute(...)
+TX -> Iceberg : step1 写入
+Iceberg --> TX : success
+TX -> DME : step2 写入
+DME --> TX : success
+TX -> OS : step3 写入
+OS --> TX : fail
+TX -> DME : compensate
+DME --> TX : compensated
+TX -> Iceberg : compensate
+Iceberg --> TX : compensated
+TX --> Service : 一致性失败
+Service --> Client : error
+@enduml
+```
+
+通过上述机制，系统保证“要么四个系统都完成写入并成功返回，要么在失败后尽最大可能把已完成步骤回滚到写入前状态”；若补偿未完全成功，则通过事务状态持久化和后续修复流程保证状态最终收敛。
 
 ## 4. 开发视图
 
 ### 4.1 实现模型
 
 #### 4.1.1 概述
-本软件实现元素内部划分为五类软件单元：
+本软件实现元素内部划分为六类软件单元：
 
 1. API 接入层：负责路由、请求反序列化、参数格式校验、统一响应封装。
 2. Table 服务层：负责业务编排、幂等处理、权限校验、审计记录、异常转换。
 3. Domain 模型层：负责 table 标识、请求模型、响应模型、错误模型等领域对象定义。
 4. Iceberg 访问适配层：封装对 Iceberg Catalog 的访问动作，包括 create/load/list/update/drop 等操作。
-5. 基础设施层：提供鉴权、日志、指标、链路追踪、配置管理等横切能力。
+5. 外部系统适配层：封装 DME、OpenSearch、Local 系统的写入、删除与补偿回滚动作。
+6. 基础设施层：提供鉴权、日志、指标、链路追踪、配置管理等横切能力。
 
 从设计模式角度看，本方案在实现模型中主要采用以下模式：
 
@@ -65,6 +149,7 @@
 2. 门面模式：`TableApplicationService` 对 Controller 暴露统一的 table 生命周期能力入口，屏蔽鉴权、审计、并发控制和 Catalog 访问细节。
 3. 策略模式：表更新中的 update 校验与执行按 `action` 维度预留策略扩展点；当前仅启用 `AddSchemaUpdateStrategy`，后续可平滑扩展更多官方 update 类型。
 4. 模板化编排模式：创建、更新、删除等写操作遵循“校验 -> 鉴权 -> 读取/提交 -> 审计/指标”的统一处理骨架，降低流程分支散落风险。
+5. Saga/补偿事务模式：对于 `Iceberg -> DME -> OpenSearch -> Local` 跨系统链路，不使用分布式两阶段提交，而采用顺序执行加失败补偿回滚的方式保证最终一致性。
 
 #### 4.1.2 上下文视图
 ```plantuml
@@ -74,16 +159,26 @@ rectangle "Table API Service" {
   component "API接入层" as API
   component "Table服务层" as SVC
   component "Iceberg访问适配层" as ADAPTER
+  component "事务协调器" as TX
+  component "外部系统适配层" as EXT
 }
 database "Catalog" as CATALOG
+database "DME" as DME
+database "OpenSearch" as OS
+component "Local服务" as LOCAL
 collections "对象存储/文件系统" as STORAGE
 component "鉴权/审计/监控" as DFX
 
 Client --> API
 API --> SVC
 SVC --> DFX
-SVC --> ADAPTER
+SVC --> TX
+TX --> ADAPTER
+TX --> EXT
 ADAPTER --> CATALOG
+EXT --> DME
+EXT --> OS
+EXT --> LOCAL
 CATALOG --> STORAGE
 @enduml
 ```
@@ -96,6 +191,7 @@ package "controller" {
 }
 package "service" {
   class TableApplicationService
+  class TableTransactionCoordinator
   class IdempotencyService
   class AuthorizationService
   class AuditService
@@ -110,13 +206,20 @@ package "domain" {
 package "adapter" {
   interface IcebergCatalogGateway
   class IcebergCatalogGatewayImpl
+  interface DmeGateway
+  interface OpenSearchGateway
+  interface LocalGateway
 }
 
 TableController --> TableApplicationService
+TableApplicationService --> TableTransactionCoordinator
+TableTransactionCoordinator --> DmeGateway
+TableTransactionCoordinator --> OpenSearchGateway
+TableTransactionCoordinator --> LocalGateway
 TableApplicationService --> IdempotencyService
 TableApplicationService --> AuthorizationService
 TableApplicationService --> AuditService
-TableApplicationService --> IcebergCatalogGateway
+TableTransactionCoordinator --> IcebergCatalogGateway
 TableApplicationService --> TableIdentifier
 TableApplicationService --> TableDefinition
 IcebergCatalogGatewayImpl ..|> IcebergCatalogGateway
@@ -144,12 +247,34 @@ class TableApplicationService {
   +deleteTable(cmd)
 }
 
+class TableTransactionCoordinator {
+  +executeCreate(cmd)
+  +executeUpdate(cmd)
+  +executeDelete(cmd)
+  +rollback(context)
+}
+
 interface IcebergCatalogGateway {
   +createTable(definition)
   +loadTable(identifier)
   +listTables(namespace)
   +commitTable(identifier, requirements, updates)
   +dropTable(identifier, purge)
+}
+
+interface DmeGateway {
+  +save(record)
+  +rollback(record)
+}
+
+interface OpenSearchGateway {
+  +index(document)
+  +rollback(document)
+}
+
+interface LocalGateway {
+  +notify(payload)
+  +rollback(payload)
 }
 
 class TableIdentifier {
@@ -168,7 +293,11 @@ class TableDefinition {
 }
 
 TableController --> TableApplicationService
-TableApplicationService --> IcebergCatalogGateway
+TableApplicationService --> TableTransactionCoordinator
+TableTransactionCoordinator --> IcebergCatalogGateway
+TableTransactionCoordinator --> DmeGateway
+TableTransactionCoordinator --> OpenSearchGateway
+TableTransactionCoordinator --> LocalGateway
 TableApplicationService --> TableIdentifier
 TableApplicationService --> TableDefinition
 @enduml
@@ -183,6 +312,7 @@ TableApplicationService --> TableDefinition
 | 门面模式 | `TableApplicationService` | 对外提供统一业务入口，降低上层接入复杂度 | 对 Controller 统一暴露 create/load/list/update/drop 能力 |
 | 策略模式 | Update 校验与执行组件 | 控制不同 `TableUpdate.action` 的差异化处理逻辑 | 当前仅支持 `AddSchemaUpdate`，后续可扩展 `SetPropertiesUpdate` 等策略 |
 | 模板化编排模式 | 写操作处理主流程 | 保证校验、鉴权、提交、审计等步骤顺序一致 | create/update/drop 的算法流程结构保持一致 |
+| Saga/补偿事务模式 | `TableTransactionCoordinator` | 保证 Iceberg、DME、OpenSearch、Local 的跨系统最终一致性 | 任一步失败按反向顺序回滚已完成动作 |
 
 模式关系图如下：
 
@@ -190,8 +320,12 @@ TableApplicationService --> TableDefinition
 @startuml
 class TableController
 class TableApplicationService
+class TableTransactionCoordinator
 interface IcebergCatalogGateway
 class IcebergCatalogGatewayImpl
+interface DmeGateway
+interface OpenSearchGateway
+interface LocalGateway
 interface TableUpdateStrategy {
   +supports(action)
   +validate(request)
@@ -204,9 +338,13 @@ class AuthorizationService
 TableController --> TableApplicationService : 门面调用
 TableApplicationService --> AuthorizationService : 模板化编排
 TableApplicationService --> AuditService : 模板化编排
-TableApplicationService --> IcebergCatalogGateway : 适配器调用
+TableApplicationService --> TableTransactionCoordinator : Saga编排
+TableTransactionCoordinator --> IcebergCatalogGateway : 适配器调用
+TableTransactionCoordinator --> DmeGateway : 补偿事务
+TableTransactionCoordinator --> OpenSearchGateway : 补偿事务
+TableTransactionCoordinator --> LocalGateway : 补偿事务
 IcebergCatalogGatewayImpl ..|> IcebergCatalogGateway
-TableApplicationService --> TableUpdateStrategy : 策略选择
+TableTransactionCoordinator --> TableUpdateStrategy : 策略选择
 AddSchemaUpdateStrategy ..|> TableUpdateStrategy
 AddSchemaUpdateStrategy --> IcebergCatalogGateway : 提交 AddSchemaUpdate
 @enduml
@@ -218,6 +356,8 @@ AddSchemaUpdateStrategy --> IcebergCatalogGateway : 提交 AddSchemaUpdate
 2. 新增 update 能力时，优先通过新增策略实现扩展，不直接在 `TableApplicationService.updateTable` 中堆叠分支。
 3. 公共处理步骤如鉴权、审计、错误映射应保留在模板化编排主流程中，避免下沉到各个具体策略内重复实现。
 4. 若未来接入多种 Catalog 实现，应继续通过 Gateway 适配层承接，而非在业务层增加实现分叉。
+5. 跨系统写操作必须经由 `TableTransactionCoordinator` 串行执行，不允许 Controller 或单个 Gateway 直接跨系统级联调用。
+6. 任一外部系统调用成功后，必须在事务上下文中记录可补偿信息，确保后续失败时能够执行回滚。
 
 接口设计：描述实现单元内部和外部的接口。
 
@@ -232,13 +372,20 @@ AddSchemaUpdateStrategy --> IcebergCatalogGateway : 提交 AddSchemaUpdate
 | `DELETE /v1/{prefix}/namespaces/{namespace}/tables/{table}` | 外部接口 | 服务对调用方 | 删除表 |
 | `HEAD /v1/{prefix}/namespaces/{namespace}/tables/{table}` | 外部接口 | 服务对调用方 | 检查表是否存在 |
 | `IcebergCatalogGateway` | 内部接口 | 服务层对适配层 | 访问 Iceberg Catalog |
+| `DmeGateway` | 内部接口 | 事务协调器对 DME | DME 写入与补偿回滚 |
+| `OpenSearchGateway` | 内部接口 | 事务协调器对 OpenSearch | 索引写入与补偿回滚 |
+| `LocalGateway` | 内部接口 | 事务协调器对 Local | 本地调用与补偿回滚 |
 | `AuthorizationService` | 内部接口 | 服务层对基础设施层 | 鉴权 |
 | `AuditService` | 内部接口 | 服务层对基础设施层 | 审计日志记录 |
 
 ```plantuml
 @startuml
 TableController --> TableApplicationService : REST DTO
-TableApplicationService --> IcebergCatalogGateway : Domain Model
+TableApplicationService --> TableTransactionCoordinator : 写操作编排
+TableTransactionCoordinator --> IcebergCatalogGateway : Domain Model
+TableTransactionCoordinator --> DmeGateway : DME DTO
+TableTransactionCoordinator --> OpenSearchGateway : Index DTO
+TableTransactionCoordinator --> LocalGateway : Local DTO
 TableApplicationService --> AuthorizationService : Auth Check
 TableApplicationService --> AuditService : Audit Event
 @enduml
@@ -289,6 +436,7 @@ TableApplicationService --> AuditService : Audit Event
 4. 查询列表返回官方 `ListTablesResponse`，仅包含 `identifiers`，不附加自定义分页和过滤协议。
 5. 删除表使用官方 `DELETE` 语义，并通过 `purgeRequested` 查询参数表达是否请求删除底层数据与 metadata。
 6. 所有写操作都要经过权限校验、审计记录和并发一致性检查；若要求失败或提交冲突，按官方 `ErrorModel` 返回 409。
+7. create/update/delete 成功写入 Iceberg 后，必须继续按 `DME -> OpenSearch -> Local` 固定顺序同步；任一步失败均触发已完成步骤的补偿回滚。
 
 建议错误码如下：
 
@@ -298,6 +446,7 @@ TableApplicationService --> AuditService : Audit Event
 | `ErrorModel.code=409` | 对象已存在或提交冲突 | `AlreadyExistsException`、`CommitFailedException` |
 | `ErrorModel.code=400` | 请求参数非法 | 请求体非法、schema/namespace 不合法 |
 | `ErrorModel.code=403` | 无权限 | 越权访问 namespace 或表 |
+| `ErrorModel.code=409/500` | 跨系统一致性失败 | DME/OpenSearch/Local 任一步失败且触发补偿 |
 | `ErrorModel.code=5xx` | 底层或服务异常 | Catalog 不可达、提交状态未知、内部错误 |
 
 #### 4.2.4 技术选型
@@ -671,8 +820,9 @@ CommitTableRequest --> TableIdentifier
 数据存储相关设计以“服务无业务主数据持久化，核心状态以 Iceberg metadata 为准”为原则：
 
 1. table 主状态来自 Iceberg Catalog 和 metadata 文件。
-2. 服务侧仅在需要时补充非强一致治理数据，如审计日志、内部重复请求治理记录、指标事件。
-3. 外部 API 模型不做二次持久化改写，服务内部适配逻辑只负责官方 schema 到内部执行模型的转换。
+2. DME、OpenSearch、Local 均视为 Iceberg 主状态的衍生系统，需要通过事务编排保证状态收敛。
+3. 服务侧仅在需要时补充非强一致治理数据，如审计日志、内部重复请求治理记录、指标事件。
+4. 外部 API 模型不做二次持久化改写，服务内部适配逻辑只负责官方 schema 到内部执行模型的转换。
 
 #### 4.3.4 数据模型设计
 核心数据对象设计如下：
@@ -764,6 +914,24 @@ entity "Property" as property {
   prop_value : string
 }
 
+entity "DME_Record" as dme_record {
+  * table_key : string
+  --
+  sync_status : string
+}
+
+entity "OpenSearch_Doc" as os_doc {
+  * document_id : string
+  --
+  sync_status : string
+}
+
+entity "Local_Record" as local_record {
+  * local_key : string
+  --
+  sync_status : string
+}
+
 namespace ||--o{ table : contains
 table ||--o{ schema : owns
 schema ||--o{ field : defines
@@ -772,6 +940,9 @@ spec ||--o{ partition_field : defines
 table ||--o{ sort_order : uses
 sort_order ||--o{ sort_field : defines
 table ||--o{ property : has
+table ||--|| dme_record : sync_to
+dme_record ||--|| os_doc : index_to
+os_doc ||--|| local_record : notify_to
 table }o--|| schema : current_schema_id
 table }o--|| spec : default_spec_id
 table }o--|| sort_order : default_sort_order_id
@@ -792,15 +963,16 @@ sort_field }o--|| field : source_id
 2. 对外请求体必须保持官方 schema，不允许在算法层要求调用方增加自定义扩展字段。
 3. 对底层并发提交失败需识别并映射为官方 `ErrorModel` 409。
 4. 审计日志与指标采集不能影响主流程结果判定，失败时应降级处理。
+5. 跨系统写入必须保证顺序固定为 `Iceberg -> DME -> OpenSearch -> Local`，补偿顺序必须与之相反。
 
 #### 4.4.3 设计选型
 算法方案采用“编排型服务流程 + 适配层执行”的实现方式：
 
-1. createTable 采用“参数校验 -> 鉴权 -> 组织官方 `CreateTableRequest` -> 调用 create -> 返回 `LoadTableResult` -> 审计/指标”的流程。
-2. updateTable 采用“读取路径标识 -> 校验 `CommitTableRequest` -> 校验 `updates` 仅包含单个 `AddSchemaUpdate` -> 提交 requirements/updates -> 冲突识别 -> 返回 `CommitTableResponse`”的流程。
-3. dropTable 采用“保护校验 -> 按 `purgeRequested` 调用删除 -> 返回 204”的流程。
+1. createTable 采用“参数校验 -> 鉴权 -> 调用 Iceberg -> 写入 DME -> 写入 OpenSearch -> 调用 Local -> 全部成功后返回结果；任一步失败触发补偿回滚”的流程。
+2. updateTable 采用“读取路径标识 -> 校验 `CommitTableRequest` -> 校验 `updates` 仅包含单个 `AddSchemaUpdate` -> 提交 Iceberg 更新 -> 同步 DME/OpenSearch/Local -> 冲突识别或补偿回滚 -> 返回 `CommitTableResponse`”的流程。
+3. dropTable 采用“保护校验 -> 调用 Iceberg 删除 -> 同步 DME/OpenSearch/Local 删除或标记 -> 任一步失败触发补偿恢复 -> 全部成功后返回 204”的流程。
 
-该方案的优点是职责清晰、便于测试、方便后续接入不同 Catalog 实现。
+该方案的优点是职责清晰、便于测试、方便后续接入不同 Catalog 实现，同时能够在没有分布式强事务前提下通过 Saga 补偿机制保证跨系统最终一致性。
 
 #### 4.4.4 算法实现
 核心流程伪代码如下：
@@ -812,10 +984,21 @@ CreateTable(request):
   authorize(identifier, "create")
   if gateway.tableExists(identifier):
       return TABLE_ALREADY_EXISTS
+  tx = beginSaga(identifier, "create")
   result = gateway.createTable(request)
+  tx.record("iceberg", result)
+  dmeGateway.save(buildDmeRecord(result))
+  tx.record("dme", result)
+  openSearchGateway.index(buildIndexDoc(result))
+  tx.record("opensearch", result)
+  localGateway.notify(buildLocalPayload(result))
+  tx.record("local", result)
   recordAudit("create", success)
   emitMetrics("create", success)
   return result
+onFailure:
+  rollbackInReverse(tx)
+  throw ConsistencyException
 
 UpdateTable(request):
   validate(request)
@@ -825,20 +1008,43 @@ UpdateTable(request):
   if current not exists:
       return TABLE_NOT_FOUND
   verifySingleAddSchemaUpdate(request.updates)
-  gateway.commitTable(identifier, request.requirements, request.updates)
+  tx = beginSaga(identifier, "update")
+  commitResponse = gateway.commitTable(identifier, request.requirements, request.updates)
+  tx.record("iceberg", commitResponse)
+  dmeGateway.save(buildDmeRecord(commitResponse))
+  tx.record("dme", commitResponse)
+  openSearchGateway.index(buildIndexDoc(commitResponse))
+  tx.record("opensearch", commitResponse)
+  localGateway.notify(buildLocalPayload(commitResponse))
+  tx.record("local", commitResponse)
   recordAudit("update", success)
   return commitResponse
+onFailure:
+  rollbackInReverse(tx)
+  throw ConsistencyException
 
 DeleteTable(request):
   validate(request)
   identifier = { namespace: path.namespace, name: path.table }
   authorize(identifier, "delete")
   checkProtectedTable(identifier)
+  snapshot = gateway.loadTable(identifier)
+  tx = beginSaga(identifier, "delete")
   deleted = gateway.dropTable(identifier, purge=request.purgeRequested)
   if deleted == false:
       return TABLE_NOT_FOUND
+  tx.record("iceberg", snapshot)
+  dmeGateway.rollback(buildDmeRecord(snapshot))
+  tx.record("dme", snapshot)
+  openSearchGateway.rollback(buildIndexDoc(snapshot))
+  tx.record("opensearch", snapshot)
+  localGateway.rollback(buildLocalPayload(snapshot))
+  tx.record("local", snapshot)
   recordAudit("delete", success)
   return NO_CONTENT
+onFailure:
+  rollbackDeleteInReverse(tx, snapshot)
+  throw ConsistencyException
 ```
 
 ### 4.5 安全实现设计
@@ -857,6 +1063,7 @@ DeleteTable(request):
 | CreateTable | 非法 schema/属性注入 | 可能生成不合规表定义 |
 | UpdateTable | 越权修改、属性污染 | 可能修改关键治理属性 |
 | DeleteTable | 误删、越权删除 | 可能造成业务中断 |
+| TransactionCoordinator | 部分成功导致跨系统不一致 | 可能造成 Iceberg、DME、OpenSearch、Local 状态不一致 |
 | List/GetTable | 敏感元数据泄露 | 可能暴露 location、内部属性 |
 | Internal dedupe | 重复提交同一外部请求 | 可能造成重复执行或审计污染 |
 
@@ -869,6 +1076,8 @@ DeleteTable(request):
 4. 对 location 等敏感字段按调用方权限控制是否返回完整值。
 5. 审计日志记录请求摘要、操作者、目标对象、结果和失败原因，避免记录敏感全文。
 6. 内部若启用重复请求治理，应以请求摘要或网关幂等设施实现，不能改变官方 REST 请求体。
+7. 对 DME、OpenSearch、Local 的写入与回滚均需配置超时、重试上限和失败告警，避免长时间悬挂导致补偿失效。
+8. 事务协调器需持久化 saga 上下文，至少记录已完成步骤、补偿参数、失败原因和最终状态，便于自动重试与人工修复。
 
 ### 4.6 开发者测试模型
 
@@ -889,6 +1098,7 @@ DeleteTable(request):
 2. 使用统一错误转换器，便于断言错误码输出。
 3. 鉴权、审计、幂等服务通过接口注入，便于 Mock 和故障模拟。
 4. 关键流程增加结构化日志字段，便于联调和问题定位。
+5. 事务协调器输出 `sagaId`、`stepName`、`stepStatus`、`compensationStatus` 等字段，便于一致性问题排查。
 
 #### 4.6.4 分层测试
 测试分层与重点如下：
@@ -899,6 +1109,7 @@ DeleteTable(request):
 | 接口测试 | REST 协议行为、官方 URL、状态码、请求响应模型、鉴权失败处理 |
 | 集成测试 | 与真实或兼容 Iceberg REST Catalog 交互的 create/load/list/update/drop 流程 |
 | 并发测试 | 同表并发更新、重复删除、重复创建的冲突与官方返回行为 |
+| 一致性测试 | DME/OpenSearch/Local 任一步失败时的补偿回滚、重试与人工修复链路 |
 | 稳定性测试 | Catalog 异常、超时、部分依赖失败时的降级与观测能力 |
 
 ## 5. 运行视图
@@ -914,6 +1125,7 @@ DeleteTable(request):
 1. 所有写请求必须在访问底层 Catalog 前完成鉴权与校验。
 2. 查询请求需兼顾最小必要信息返回原则。
 3. 审计与指标采集应伴随主流程执行，但不阻塞结果返回。
+4. 写请求一旦进入事务协调器，后续必须按固定链路 `Iceberg -> DME -> OpenSearch -> Local` 串行推进。
 
 #### 5.1.3 交互模型设计
 创建表交互模型：
@@ -932,10 +1144,18 @@ Client -> Controller : POST /v1/{prefix}/namespaces/{namespace}/tables
 Controller -> Service : createTable(request)
 Service -> Auth : check(create, identifier)
 Auth --> Service : allow
-Service -> Gateway : createTable(request)
+Service -> TX : executeCreate(request)
+TX -> Gateway : createTable(request)
 Gateway -> Catalog : createTable(...)
 Catalog --> Gateway : success
-Gateway --> Service : created
+Gateway --> TX : created
+TX -> DME : save(record)
+DME --> TX : success
+TX -> OS : index(document)
+OS --> TX : success
+TX -> Local : notify(payload)
+Local --> TX : success
+TX --> Service : created
 Service -> Audit : record(success)
 Service --> Controller : response
 Controller --> Client : 200
@@ -956,13 +1176,37 @@ if (鉴权通过?) then (是)
     stop
   else (否)
     :调用 Iceberg createTable;
-    if (stage-create=true?) then (是)
-      :返回 staged LoadTableResult;
+    :写入 DME;
+    if (DME 成功?) then (是)
+      :写入 OpenSearch;
+      if (OpenSearch 成功?) then (是)
+        :调用 Local 接口;
+        if (Local 成功?) then (是)
+          if (stage-create=true?) then (是)
+            :返回 staged LoadTableResult;
+          else (否)
+            :返回 committed LoadTableResult;
+          endif
+          :记录审计与指标;
+          stop
+        else (否)
+          :回滚 OpenSearch;
+          :回滚 DME;
+          :回滚 Iceberg;
+          :返回一致性失败错误;
+          stop
+        endif
+      else (否)
+        :回滚 DME;
+        :回滚 Iceberg;
+        :返回一致性失败错误;
+        stop
+      endif
     else (否)
-      :返回 committed LoadTableResult;
+      :回滚 Iceberg;
+      :返回一致性失败错误;
+      stop
     endif
-    :记录审计与指标;
-    stop
   endif
 else (否)
   :返回 403 ErrorModel;
@@ -978,8 +1222,12 @@ endif
 actor Client
 participant Controller
 participant Service
+participant TX as TransactionCoordinator
 participant Auth
 participant Gateway
+participant DME
+participant OS as OpenSearch
+participant Local
 participant Catalog
 
 Client -> Controller : GET /v1/{prefix}/namespaces/{namespace}/tables/{table}
@@ -1026,19 +1274,31 @@ endif
 actor Client
 participant Controller
 participant Service
+participant TX as TransactionCoordinator
 participant Gateway
+participant DME
+participant OS as OpenSearch
+participant Local
 participant Catalog
 
 Client -> Controller : POST /v1/{prefix}/namespaces/{namespace}/tables/{table}
 Controller -> Service : updateTable(request)
-Service -> Gateway : loadTable(identifier)
+Service -> TX : executeUpdate(request)
+TX -> Gateway : loadTable(identifier)
 Gateway -> Catalog : loadTable(...)
 Catalog --> Gateway : current metadata
-Gateway --> Service : current
-Service -> Gateway : commitTable(identifier, requirements, updates)
+Gateway --> TX : current
+TX -> Gateway : commitTable(identifier, requirements, updates)
 Gateway -> Catalog : commit table changes
 Catalog --> Gateway : success/conflict
-Gateway --> Service : result
+Gateway --> TX : result
+TX -> DME : save(record)
+DME --> TX : success/fail
+TX -> OS : index(document)
+OS --> TX : success/fail
+TX -> Local : notify(payload)
+Local --> TX : success/fail
+TX --> Service : result/rollback
 Service --> Controller : response
 Controller --> Client : 200/409
 @enduml
@@ -1057,10 +1317,34 @@ if (鉴权通过?) then (是)
     :校验 updates 数量;
     if (仅包含一个 AddSchemaUpdate?) then (是)
       :校验 requirements;
-      :提交 commitTable;
-      if (提交成功?) then (是)
-        :返回 CommitTableResponse;
-        stop
+      :提交 Iceberg commitTable;
+      if (Iceberg 提交成功?) then (是)
+        :写入 DME;
+        if (DME 成功?) then (是)
+          :写入 OpenSearch;
+          if (OpenSearch 成功?) then (是)
+            :调用 Local;
+            if (Local 成功?) then (是)
+              :返回 CommitTableResponse;
+              stop
+            else (否)
+              :回滚 OpenSearch;
+              :回滚 DME;
+              :回滚 Iceberg;
+              :返回一致性失败错误;
+              stop
+            endif
+          else (否)
+            :回滚 DME;
+            :回滚 Iceberg;
+            :返回一致性失败错误;
+            stop
+          endif
+        else (否)
+          :回滚 Iceberg;
+          :返回一致性失败错误;
+          stop
+        endif
       else (否)
         :返回 409 ErrorModel;
         stop
@@ -1096,10 +1380,18 @@ Controller -> Service : deleteTable(request)
 Service -> Auth : check(delete, identifier)
 Auth --> Service : allow
 Service -> Service : checkProtectedTable
-Service -> Gateway : dropTable(identifier, purgeRequested)
+Service -> TX : executeDelete(request)
+TX -> Gateway : dropTable(identifier, purgeRequested)
 Gateway -> Catalog : dropTable(...)
 Catalog --> Gateway : success/not_found
-Gateway --> Service : result
+Gateway --> TX : result
+TX -> DME : rollback(record)
+DME --> TX : success/fail
+TX -> OS : rollback(document)
+OS --> TX : success/fail
+TX -> Local : rollback(payload)
+Local --> TX : success/fail
+TX --> Service : result/rollback
 Service --> Controller : response
 Controller --> Client : 204/404
 @enduml
@@ -1117,8 +1409,32 @@ if (鉴权通过?) then (是)
   if (允许删除?) then (是)
     :调用 Iceberg dropTable;
     if (表存在?) then (是)
-      :返回 204;
-      stop
+      :删除 DME 数据;
+      if (DME 成功?) then (是)
+        :删除 OpenSearch 文档;
+        if (OpenSearch 成功?) then (是)
+          :调用 Local 删除接口;
+          if (Local 成功?) then (是)
+            :返回 204;
+            stop
+          else (否)
+            :恢复 OpenSearch;
+            :恢复 DME;
+            :恢复 Iceberg;
+            :返回一致性失败错误;
+            stop
+          endif
+        else (否)
+          :恢复 DME;
+          :恢复 Iceberg;
+          :返回一致性失败错误;
+          stop
+        endif
+      else (否)
+        :恢复 Iceberg;
+        :返回一致性失败错误;
+        stop
+      endif
     else (否)
       :返回 404 ErrorModel;
       stop
@@ -1145,15 +1461,17 @@ endif
 1. Iceberg metadata 更新遵循乐观并发思想，提交时可能出现版本冲突。
 2. 同一 table 的并发修改需优先保证一致性，而非最后写入覆盖。
 3. 重试请求不能导致重复创建、重复删除或重复审计。
+4. 跨系统事务执行期间，必须保证单个 saga 的步骤顺序和补偿顺序可重放、可恢复。
 
 #### 5.2.3 并发模型设计
 并发处理机制设计如下：
 
-1. 创建表：若两个请求并发创建同一表，以底层已存在结果返回 409，错误体遵循官方 `ErrorModel`。
-2. 提交表更新：并发控制依赖 `CommitTableRequest.requirements` 与底层 metadata commit 的乐观并发机制；要求失败时返回 409。
-3. 删除表：删除操作遵循官方 `DELETE` 语义；首次删除成功返回 204，再次删除返回 404。
+1. 创建表：若两个请求并发创建同一表，以底层已存在结果返回 409，错误体遵循官方 `ErrorModel`；若 saga 在 DME/OpenSearch/Local 任一步失败，则按 `Local -> OpenSearch -> DME -> Iceberg` 逆序补偿。
+2. 提交表更新：并发控制依赖 `CommitTableRequest.requirements` 与底层 metadata commit 的乐观并发机制；要求失败时返回 409；若外部系统失败，则必须回滚 Iceberg 已提交的变更。
+3. 删除表：删除操作遵循官方 `DELETE` 语义；首次删除成功返回 204，再次删除返回 404；若后续外部系统补偿失败，则需标记为人工修复任务。
 4. 查询操作：查询不加写锁，读取当前可见 metadata 快照；若与写请求并发，以读取到的当前状态为准。
 5. 内部若实现重复请求治理，仅作为服务内部机制存在，不在外部契约中增加字段。
+6. 事务协调器需为每次写操作分配 `sagaId`，并持久化步骤状态、补偿状态和最终一致性结果。
 
 并发单元划分与协同方式如下：
 
@@ -1162,4 +1480,5 @@ endif
 | API 请求实例 | 单次请求上下文 | 负责校验、鉴权、幂等判断 |
 | Service 写流程 | 单表写操作 | 负责读取当前状态与提交控制 |
 | Gateway 提交动作 | Iceberg metadata commit | 依赖底层乐观并发机制 |
+| Saga 事务协调器 | 单次跨系统事务 | 负责步骤编排、状态记录、失败补偿 |
 | 内部去重存储 | 请求摘要记录 | 负责去重与结果复用 |
