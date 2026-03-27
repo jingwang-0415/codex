@@ -270,6 +270,257 @@ GTable --> ITable : 表资源映射
 - 本期实现重点仍是“单表生命周期管理 + 基础治理能力”，避免因引入 namespace、view、transaction 等能力导致范围失控。
 - 后续若扩展相关接口，应继续优先复用官方路径、请求体和错误模型，不单独设计私有契约。
 
+支持的六个接口调用示例如下，统一以 JSON 形式给出：
+
+1. `createTable`
+
+接口 URL：`/v1/{prefix}/namespaces/{namespace}/tables`  
+调用方法：`POST`
+
+```json
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/main/namespaces/sales/tables",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "name": "orders",
+      "schema": {
+        "type": "struct",
+        "schema-id": 0,
+        "fields": [
+          {
+            "id": 1,
+            "name": "order_id",
+            "type": "long",
+            "required": true
+          },
+          {
+            "id": 2,
+            "name": "customer_id",
+            "type": "long",
+            "required": false
+          },
+          {
+            "id": 3,
+            "name": "created_at",
+            "type": "timestamp",
+            "required": false
+          }
+        ],
+        "identifier-field-ids": [1]
+      },
+      "partition-spec": {
+        "fields": [
+          {
+            "source-id": 3,
+            "field-id": 1000,
+            "name": "created_at_day",
+            "transform": "day"
+          }
+        ]
+      },
+      "location": "s3://warehouse/orders",
+      "stage-create": false,
+      "properties": {
+        "owner": "data-platform",
+        "write.format.default": "parquet"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "metadata-location": "s3://warehouse/orders/metadata/00000-uuid.metadata.json",
+      "metadata": {
+        "format-version": 2,
+        "location": "s3://warehouse/orders",
+        "last-column-id": 3,
+        "current-schema-id": 0,
+        "properties": {
+          "owner": "data-platform",
+          "write.format.default": "parquet"
+        }
+      },
+      "config": {}
+    }
+  }
+}
+```
+
+2. `listTables`
+
+接口 URL：`/v1/{prefix}/namespaces/{namespace}/tables`  
+调用方法：`GET`
+
+```json
+{
+  "request": {
+    "method": "GET",
+    "path": "/v1/main/namespaces/sales/tables"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "identifiers": [
+        {
+          "namespace": ["sales"],
+          "name": "orders"
+        },
+        {
+          "namespace": ["sales"],
+          "name": "refunds"
+        }
+      ]
+    }
+  }
+}
+```
+
+3. `loadTable`
+
+接口 URL：`/v1/{prefix}/namespaces/{namespace}/tables/{table}`  
+调用方法：`GET`
+
+```json
+{
+  "request": {
+    "method": "GET",
+    "path": "/v1/main/namespaces/sales/tables/orders?snapshots=all"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "metadata-location": "s3://warehouse/orders/metadata/00003-uuid.metadata.json",
+      "metadata": {
+        "format-version": 2,
+        "table-uuid": "84a6f793-5c90-4d3b-a391-8d28f3c7b2f3",
+        "location": "s3://warehouse/orders",
+        "last-column-id": 4,
+        "current-schema-id": 1
+      },
+      "config": {
+        "token": "******"
+      }
+    }
+  }
+}
+```
+
+4. `updateTable`
+
+接口 URL：`/v1/{prefix}/namespaces/{namespace}/tables/{table}`  
+调用方法：`POST`
+
+```json
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/main/namespaces/sales/tables/orders",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "requirements": [
+        {
+          "type": "assert-current-schema-id",
+          "current-schema-id": 0
+        },
+        {
+          "type": "assert-last-assigned-field-id",
+          "last-assigned-field-id": 3
+        }
+      ],
+      "updates": [
+        {
+          "action": "add-schema",
+          "schema": {
+            "type": "struct",
+            "schema-id": 1,
+            "fields": [
+              {
+                "id": 1,
+                "name": "order_id",
+                "type": "long",
+                "required": true
+              },
+              {
+                "id": 2,
+                "name": "customer_id",
+                "type": "long",
+                "required": false
+              },
+              {
+                "id": 3,
+                "name": "created_at",
+                "type": "timestamp",
+                "required": false
+              },
+              {
+                "id": 4,
+                "name": "order_source",
+                "type": "string",
+                "required": false
+              }
+            ]
+          },
+          "last-column-id": 4
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "metadata-location": "s3://warehouse/orders/metadata/00004-uuid.metadata.json",
+      "metadata": {
+        "format-version": 2,
+        "last-column-id": 4,
+        "current-schema-id": 1
+      }
+    }
+  }
+}
+```
+
+5. `dropTable`
+
+接口 URL：`/v1/{prefix}/namespaces/{namespace}/tables/{table}`  
+调用方法：`DELETE`
+
+```json
+{
+  "request": {
+    "method": "DELETE",
+    "path": "/v1/main/namespaces/sales/tables/orders?purgeRequested=false"
+  },
+  "response": {
+    "status": 204,
+    "body": {}
+  }
+}
+```
+
+6. `tableExists`
+
+接口 URL：`/v1/{prefix}/namespaces/{namespace}/tables/{table}`  
+调用方法：`HEAD`
+
+```json
+{
+  "request": {
+    "method": "HEAD",
+    "path": "/v1/main/namespaces/sales/tables/orders"
+  },
+  "response": {
+    "status": 204,
+    "body": {}
+  }
+}
+```
+
 Iceberg 接口分析流程如下：
 
 ```plantuml
