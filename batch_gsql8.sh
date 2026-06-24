@@ -1,7 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-GSQL_BIN=${GSQL_BIN:-gsql8}
+GSQL_BIN=${GSQL_BIN:-gsql}
+GSQL_ARGS=${GSQL_ARGS:--d postgres -p 7999 -r}
 GRAPH_PATH=${GRAPH_PATH:-test_dl3kw}
 
 SINGLE_TIMES=${SINGLE_TIMES:-100}
@@ -40,13 +41,29 @@ make_suffix() {
 }
 
 check_gsql_bin() {
-  local output
+  local output gsql_args=()
 
-  if ! output=$("${GSQL_BIN}" --help 2>&1); then
-    printf 'Failed to run GSQL_BIN=%s. Please check gsql8 is executable.\n' "${GSQL_BIN}" >&2
+  if [ -n "${GSQL_ARGS}" ]; then
+    # Split simple command-line args such as: -d postgres -p 7999 -r
+    read -r -a gsql_args <<< "${GSQL_ARGS}"
+  fi
+
+  if ! output=$("${GSQL_BIN}" "${gsql_args[@]}" --help 2>&1); then
+    printf 'Failed to run gsql command: %s %s\n' "${GSQL_BIN}" "${GSQL_ARGS}" >&2
     printf '%s\n' "${output}" >&2
     return 127
   fi
+}
+
+run_gsql_command() {
+  local gsql_command="$1"
+  local gsql_args=()
+
+  if [ -n "${GSQL_ARGS}" ]; then
+    read -r -a gsql_args <<< "${GSQL_ARGS}"
+  fi
+
+  "${GSQL_BIN}" "${gsql_args[@]}" -c "${gsql_command}"
 }
 
 require_command() {
@@ -82,9 +99,10 @@ execute_gsql() {
 
   timeout_bin=$(timeout_command)
   if [ -n "${max_time}" ] && [ -n "${timeout_bin}" ]; then
-    "${timeout_bin}" "${max_time}" "${GSQL_BIN}" -c "${gsql_command}" > "${output_file}" 2>&1
+    "${timeout_bin}" "${max_time}" bash -c "$(declare -f run_gsql_command); GSQL_BIN=\$1; GSQL_ARGS=\$2; run_gsql_command \"\$3\"" \
+      _ "${GSQL_BIN}" "${GSQL_ARGS}" "${gsql_command}" > "${output_file}" 2>&1
   else
-    "${GSQL_BIN}" -c "${gsql_command}" > "${output_file}" 2>&1
+    run_gsql_command "${gsql_command}" > "${output_file}" 2>&1
   fi
   status=$?
 
@@ -687,6 +705,7 @@ main() {
     echo "TuGraph Perf Test Report (gsql8)"
     echo "run_id=${RUN_KEY}"
     echo "gsql_bin=${GSQL_BIN}"
+    echo "gsql_args=${GSQL_ARGS}"
     echo "graph_path=${GRAPH_PATH}"
     echo "query_limits=${QUERY_LIMITS}"
     echo "query_limit_skip_seconds=${QUERY_LIMIT_SKIP_SECONDS}"
