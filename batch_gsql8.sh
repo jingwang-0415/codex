@@ -387,7 +387,11 @@ $(printf '%s\n' "${report}" | sed '$d')
 }
 
 cypher_string_literal() {
-  jq -Rn --arg value "$1" '$value'
+  local value="$1"
+
+  value=${value//\\/\\\\}
+  value=${value//\'/\\\'}
+  printf "'%s'" "${value}"
 }
 
 extract_query_values() {
@@ -395,6 +399,7 @@ extract_query_values() {
     BEGIN { FS = "|" }
     function trim(value) {
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      gsub(/^["'\'']|["'\'']$/, "", value)
       return value
     }
     /^[[:space:]]*$/ { next }
