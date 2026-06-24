@@ -40,17 +40,12 @@ make_suffix() {
 }
 
 check_gsql_bin() {
-  if [[ "${GSQL_BIN}" == */* ]]; then
-    if [ ! -x "${GSQL_BIN}" ]; then
-      printf 'Cannot execute GSQL_BIN=%s. Please set GSQL_BIN to the gsql8 executable path.\n' "${GSQL_BIN}" >&2
-      return 127
-    fi
-  else
-    if ! command -v "${GSQL_BIN}" >/dev/null; then
-      printf 'Cannot find %s in PATH. Please run with GSQL_BIN=/path/to/gsql8 %s.\n' \
-        "${GSQL_BIN}" "$0" >&2
-      return 127
-    fi
+  local output
+
+  if ! output=$("${GSQL_BIN}" --help 2>&1); then
+    printf 'Failed to run GSQL_BIN=%s. Please check gsql8 is executable.\n' "${GSQL_BIN}" >&2
+    printf '%s\n' "${output}" >&2
+    return 127
   fi
 }
 
