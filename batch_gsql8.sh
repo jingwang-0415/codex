@@ -238,8 +238,8 @@ timed_cypher() {
   read -r db_elapsed_ms gsql_total_ms client_overhead_ms <<< "${timing}"
   progress_log "END phase=${phase} case=${case_name} sequence=${sequence} status=${status} elapsed_ms=${gsql_total_ms}"
 
-  cypher_csv=$(jq -rn --arg cypher "${cypher}" \
-    '$cypher | gsub("\\r"; "") | gsub("\\n"; "\\n") | gsub("\""; "\"\"")')
+  cypher_csv=$(printf '%s' "${cypher}" | jq -Rs \
+    'gsub("\\r"; "") | gsub("\\n"; "\\n") | gsub("\""; "\"\"")')
   append_execution_row "$(printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"%s"' \
     "${RUN_KEY}" "${started_at}" "${phase}" "${case_name}" "${sequence}" \
     "${units}" "${db_elapsed_ms}" "${gsql_total_ms}" "${client_overhead_ms}" "${status}" \
