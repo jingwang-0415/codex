@@ -3,6 +3,8 @@ set -euo pipefail
 
 GSQL_BIN=${GSQL_BIN:-gsql}
 GSQL_ARGS=${GSQL_ARGS:--d postgres -p 7999 -r}
+GSQL_C_MAX_CHARS=${GSQL_C_MAX_CHARS:-100000}
+PROGRESS=${PROGRESS:-1}
 GRAPH_PATH=${GRAPH_PATH:-test_dl3kw}
 
 SINGLE_TIMES=${SINGLE_TIMES:-100}
@@ -19,6 +21,7 @@ QUERY_UNLIMITED_MAX_HOP=${QUERY_UNLIMITED_MAX_HOP:-7}
 QUERY_SAMPLE_SIZE=${QUERY_SAMPLE_SIZE:-1000}
 
 REPORT_FILE=${REPORT_FILE:-perf_report.txt}
+LOG_FILE=${LOG_FILE:-${REPORT_FILE%.*}.log}
 RUN_ID=$(date +%s)
 RUN_KEY=$(date '+%Y%m%d_%H%M%S')_$$
 EXECUTION_FILE=${EXECUTION_FILE:-${REPORT_FILE%.*}_cypher_executions.csv}
@@ -57,13 +60,37 @@ check_gsql_bin() {
 
 run_gsql_command() {
   local gsql_command="$1"
+  local gsql_args=() script_file status
+
+  if [ -n "${GSQL_ARGS}" ]; then
+    read -r -a gsql_args <<< "${GSQL_ARGS}"
+  fi
+
+  if [ "${#gsql_command}" -le "${GSQL_C_MAX_CHARS:-100000}" ]; then
+    "${GSQL_BIN}" "${gsql_args[@]}" -c "${gsql_command}"
+    return
+  fi
+
+  script_file=$(mktemp "${TMPDIR:-/tmp}/batch_gsql8.sql.XXXXXX")
+  printf '%s\n' "${gsql_command}" > "${script_file}"
+  if "${GSQL_BIN}" "${gsql_args[@]}" -f "${script_file}"; then
+    status=0
+  else
+    status=$?
+  fi
+  rm -f "${script_file}"
+  return "${status}"
+}
+
+run_gsql_file() {
+  local script_file="$1"
   local gsql_args=()
 
   if [ -n "${GSQL_ARGS}" ]; then
     read -r -a gsql_args <<< "${GSQL_ARGS}"
   fi
 
-  "${GSQL_BIN}" "${gsql_args[@]}" -c "${gsql_command}"
+  "${GSQL_BIN}" "${gsql_args[@]}" -f "${script_file}"
 }
 
 require_command() {
@@ -92,19 +119,29 @@ build_gsql_command() {
 execute_gsql() {
   local cypher="$1"
   local max_time="${2:-}"
-  local gsql_command output_file timeout_bin status
+  local gsql_command output_file script_file timeout_bin status
 
   output_file=$(mktemp "${TMPDIR:-/tmp}/batch_gsql8.out.XXXXXX")
   gsql_command=$(build_gsql_command "${cypher}")
 
   timeout_bin=$(timeout_command)
-  if [ -n "${max_time}" ] && [ -n "${timeout_bin}" ]; then
-    "${timeout_bin}" "${max_time}" bash -c "$(declare -f run_gsql_command); GSQL_BIN=\$1; GSQL_ARGS=\$2; run_gsql_command \"\$3\"" \
-      _ "${GSQL_BIN}" "${GSQL_ARGS}" "${gsql_command}" > "${output_file}" 2>&1
+  set +e
+  if [ -n "${max_time}" ] && [ -n "${timeout_bin}" ] && [ "${#gsql_command}" -gt "${GSQL_C_MAX_CHARS}" ]; then
+    script_file=$(mktemp "${TMPDIR:-/tmp}/batch_gsql8.sql.XXXXXX")
+    printf '%s\n' "${gsql_command}" > "${script_file}"
+    "${timeout_bin}" "${max_time}" bash -c "$(declare -f run_gsql_file); GSQL_BIN=\$1; GSQL_ARGS=\$2; run_gsql_file \"\$3\"" \
+      _ "${GSQL_BIN}" "${GSQL_ARGS}" "${script_file}" > "${output_file}" 2>&1
+    status=$?
+    rm -f "${script_file}"
+  elif [ -n "${max_time}" ] && [ -n "${timeout_bin}" ]; then
+    "${timeout_bin}" "${max_time}" bash -c "$(declare -f run_gsql_command); GSQL_BIN=\$1; GSQL_ARGS=\$2; GSQL_C_MAX_CHARS=\$3; run_gsql_command \"\$4\"" \
+      _ "${GSQL_BIN}" "${GSQL_ARGS}" "${GSQL_C_MAX_CHARS}" "${gsql_command}" > "${output_file}" 2>&1
+    status=$?
   else
     run_gsql_command "${gsql_command}" > "${output_file}" 2>&1
+    status=$?
   fi
-  status=$?
+  set -e
 
   cat "${output_file}"
   rm -f "${output_file}"
@@ -171,6 +208,18 @@ append_execution_row() {
   rmdir "${EXECUTION_LOCK_DIR}"
 }
 
+progress_log() {
+  local line
+
+  if [ "${PROGRESS}" != "1" ]; then
+    return 0
+  fi
+
+  line=$(printf '[%s] %s' "$(date '+%Y-%m-%d %H:%M:%S')" "$*")
+  printf '%s\n' "${line}" >&2
+  printf '%s\n' "${line}" >> "${LOG_FILE}"
+}
+
 timed_cypher() {
   local case_name="$1"
   local sequence="$2"
@@ -182,10 +231,12 @@ timed_cypher() {
   started_at=$(date '+%Y-%m-%d %H:%M:%S')
   phase=$(phase_for_case "${case_name}")
   status=success
+  progress_log "START phase=${phase} case=${case_name} sequence=${sequence} units=${units}"
   if ! timing=$(run_cypher "${cypher}" "${max_time}"); then
     status=failure
   fi
   read -r db_elapsed_ms gsql_total_ms client_overhead_ms <<< "${timing}"
+  progress_log "END phase=${phase} case=${case_name} sequence=${sequence} status=${status} elapsed_ms=${gsql_total_ms}"
 
   cypher_csv=$(jq -rn --arg cypher "${cypher}" \
     '$cypher | gsub("\\r"; "") | gsub("\\n"; "\\n") | gsub("\""; "\"\"")')
@@ -704,8 +755,11 @@ main() {
     echo "============================================================"
     echo "TuGraph Perf Test Report (gsql8)"
     echo "run_id=${RUN_KEY}"
+    echo "log_file=${LOG_FILE}"
     echo "gsql_bin=${GSQL_BIN}"
     echo "gsql_args=${GSQL_ARGS}"
+    echo "gsql_c_max_chars=${GSQL_C_MAX_CHARS}"
+    echo "progress=${PROGRESS}"
     echo "graph_path=${GRAPH_PATH}"
     echo "query_limits=${QUERY_LIMITS}"
     echo "query_limit_skip_seconds=${QUERY_LIMIT_SKIP_SECONDS}"
@@ -746,6 +800,7 @@ main() {
   export_execution_xlsx
 
   echo "Done. Report: ${REPORT_FILE}"
+  echo "Log: ${LOG_FILE}"
   echo "Execution detail: ${EXECUTION_FILE}"
   if [ "${EXPORT_XLSX}" = "1" ]; then
     echo "Execution workbook: ${XLSX_FILE}"
