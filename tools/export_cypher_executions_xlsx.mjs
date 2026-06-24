@@ -13,17 +13,19 @@ if (!inputCsv || !outputXlsx) {
 }
 
 const CELL_TEXT_LIMIT = 32000;
-const SUMMARY_HEADERS = [
-  "phase",
-  "count",
-  "success",
-  "failure",
-  "db_elapsed_avg_ms",
-  "db_elapsed_min_ms",
-  "db_elapsed_max_ms",
-  "http_total_avg_ms",
-  "client_overhead_avg_ms",
-];
+function summaryHeaders(totalColumn) {
+  return [
+    "phase",
+    "count",
+    "success",
+    "failure",
+    "db_elapsed_avg_ms",
+    "db_elapsed_min_ms",
+    "db_elapsed_max_ms",
+    `${totalColumn.replace(/_ms$/, "")}_avg_ms`,
+    "client_overhead_avg_ms",
+  ];
+}
 
 function parseCsv(text) {
   const rows = [];
@@ -95,7 +97,7 @@ function numeric(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function executionRows(records) {
+function executionRows(records, totalColumn) {
   return records.map((record) => {
     const statement = record.cypher_statement ?? "";
     return [
@@ -106,7 +108,7 @@ function executionRows(records) {
       numeric(record.sequence),
       numeric(record.units),
       numeric(record.db_elapsed_ms),
-      numeric(record.http_total_ms),
+      numeric(record[totalColumn]),
       numeric(record.client_overhead_ms),
       record.status,
       statement.length > CELL_TEXT_LIMIT ? statement.slice(0, CELL_TEXT_LIMIT) : statement,
@@ -115,7 +117,7 @@ function executionRows(records) {
   });
 }
 
-function summarize(records) {
+function summarize(records, totalColumn) {
   const grouped = new Map();
   for (const record of records) {
     const phase = record.phase || "unknown";
@@ -140,7 +142,7 @@ function summarize(records) {
     item.dbTotal += dbElapsed;
     item.dbMin = Math.min(item.dbMin, dbElapsed);
     item.dbMax = Math.max(item.dbMax, dbElapsed);
-    item.httpTotal += numeric(record.http_total_ms);
+    item.httpTotal += numeric(record[totalColumn]);
     item.overheadTotal += numeric(record.client_overhead_ms);
   }
 
@@ -207,11 +209,15 @@ if (records.length === 0) {
 }
 const workbook = Workbook.create();
 const usedNames = new Set();
+const totalColumn = records.some((record) => record.gsql_total_ms !== undefined)
+  ? "gsql_total_ms"
+  : "http_total_ms";
 
 const summary = workbook.worksheets.add(safeSheetName("summary", usedNames));
-const summaryRows = [SUMMARY_HEADERS, ...summarize(records)];
+const summaryHeadersForRun = summaryHeaders(totalColumn);
+const summaryRows = [summaryHeadersForRun, ...summarize(records, totalColumn)];
 writeMatrix(summary, summaryRows);
-styleSheet(summary, summaryRows.length, SUMMARY_HEADERS.length);
+styleSheet(summary, summaryRows.length, summaryHeadersForRun.length);
 summary.getRangeByIndexes(1, 4, Math.max(summaryRows.length - 1, 1), 5).format.numberFormat = "0.000";
 
 const byPhase = new Map();
@@ -229,7 +235,7 @@ const executionHeaders = [
   "sequence",
   "units",
   "db_elapsed_ms",
-  "http_total_ms",
+  totalColumn,
   "client_overhead_ms",
   "status",
   "cypher_statement",
@@ -238,7 +244,7 @@ const executionHeaders = [
 
 for (const [phase, phaseRecords] of [...byPhase.entries()].sort(([a], [b]) => a.localeCompare(b))) {
   const sheet = workbook.worksheets.add(safeSheetName(phase, usedNames));
-  const matrix = [executionHeaders, ...executionRows(phaseRecords)];
+  const matrix = [executionHeaders, ...executionRows(phaseRecords, totalColumn)];
   writeMatrix(sheet, matrix);
   styleSheet(sheet, matrix.length, executionHeaders.length);
   setExecutionWidths(sheet, matrix.length);
