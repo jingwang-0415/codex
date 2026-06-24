@@ -15,6 +15,8 @@ BATCH_SIZE=${BATCH_SIZE:-100}
 QUERY_TIMES=${QUERY_TIMES:-100}
 QUERY_MAX_HOP=${QUERY_MAX_HOP:-10}
 QUERY_LIMITS=${QUERY_LIMITS:-"1 10 100"}
+QUERY_LIMIT_SKIP_SECONDS=${QUERY_LIMIT_SKIP_SECONDS:-60}
+QUERY_UNLIMITED_MAX_HOP=${QUERY_UNLIMITED_MAX_HOP:-7}
 QUERY_SAMPLE_SIZE=${QUERY_SAMPLE_SIZE:-1000}
 
 REPORT_FILE=${REPORT_FILE:-perf_report.txt}
@@ -53,17 +55,28 @@ login() {
 
 run_cypher() {
   local cypher="$1"
+  local max_time="${2:-}"
   local payload response metadata body http_code seconds db_elapsed_ms http_total_ms client_overhead_ms
   local api_success api_error
 
   payload=$(jq -n --arg graph "${GRAPH}" --arg script "${cypher}" \
     '{graph: $graph, script: $script}')
 
-  if ! response=$(curl -sS -w $'\n%{http_code},%{time_total}' \
-    -X POST "${API_URL}/cypher" \
-    -H 'Content-Type: application/json' \
-    -H "Authorization: Bearer ${TOKEN}" \
-    --data-binary "${payload}"); then
+  if [ -n "${max_time}" ]; then
+    response=$(curl --max-time "${max_time}" -sS -w $'\n%{http_code},%{time_total}' \
+      -X POST "${API_URL}/cypher" \
+      -H 'Content-Type: application/json' \
+      -H "Authorization: Bearer ${TOKEN}" \
+      --data-binary "${payload}") || {
+      printf '0 0 0'
+      printf 'Cypher request failed before receiving a complete HTTP response.\n' >&2
+      return 1
+    }
+  elif ! response=$(curl -sS -w $'\n%{http_code},%{time_total}' \
+      -X POST "${API_URL}/cypher" \
+      -H 'Content-Type: application/json' \
+      -H "Authorization: Bearer ${TOKEN}" \
+      --data-binary "${payload}"); then
     printf '0 0 0'
     printf 'Cypher request failed before receiving a complete HTTP response.\n' >&2
     return 1
@@ -172,12 +185,13 @@ timed_cypher() {
   local sequence="$2"
   local units="$3"
   local cypher="$4"
+  local max_time="${5:-}"
   local started_at phase timing db_elapsed_ms http_total_ms client_overhead_ms status cypher_csv
 
   started_at=$(date '+%Y-%m-%d %H:%M:%S')
   phase=$(phase_for_case "${case_name}")
   status=success
-  if ! timing=$(run_cypher "${cypher}"); then
+  if ! timing=$(run_cypher "${cypher}" "${max_time}"); then
     status=failure
   fi
   read -r db_elapsed_ms http_total_ms client_overhead_ms <<< "${timing}"
@@ -405,7 +419,12 @@ query_dataset_neighbor() {
   local gid="$1"
   local hop="$2"
   local limit="$3"
+  local limit_clause=""
   local pattern=""
+
+  if [ "${limit}" != "all" ]; then
+    limit_clause="LIMIT ${limit};"
+  fi
 
   for i in $(seq 1 "${hop}"); do
     pattern="${pattern}-[:lineage]->(j${i}:job)-[:lineage]->(n${i}:dataset)"
@@ -414,7 +433,7 @@ query_dataset_neighbor() {
   cat <<EOF
 MATCH p = (d:dataset {gid: ${gid}})${pattern}
 RETURN ${hop} AS hop, d.gid AS source_gid, n${hop}.gid AS target_gid, n${hop}.id AS target_id, n${hop}.name AS target_name
-LIMIT ${limit};
+${limit_clause}
 EOF
 }
 
@@ -423,12 +442,17 @@ query_dataset_dataset_path() {
   local dst_gid="$2"
   local hop="$3"
   local limit="$4"
+  local limit_clause=""
+
+  if [ "${limit}" != "all" ]; then
+    limit_clause="LIMIT ${limit};"
+  fi
 
   cat <<EOF
 MATCH p = (src:dataset {gid: ${src_gid}})-[:lineage*1..${hop}]-(dst:dataset {gid: ${dst_gid}})
 RETURN length(p) AS hop, src.gid AS src_gid, dst.gid AS dst_gid, src.id AS src_id, dst.id AS dst_id, nodes(p) AS path_nodes, relationships(p) AS path_edges
 ORDER BY hop
-LIMIT ${limit};
+${limit_clause}
 EOF
 }
 
@@ -437,12 +461,17 @@ query_dataset_job_path() {
   local job_gid="$2"
   local hop="$3"
   local limit="$4"
+  local limit_clause=""
+
+  if [ "${limit}" != "all" ]; then
+    limit_clause="LIMIT ${limit};"
+  fi
 
   cat <<EOF
 MATCH p = (d:dataset {gid: ${dataset_gid}})-[:lineage*1..${hop}]-(j:job {gid: ${job_gid}})
 RETURN length(p) AS hop, d.gid AS dataset_gid, j.gid AS job_gid, d.id AS dataset_id, j.id AS job_id, nodes(p) AS path_nodes, relationships(p) AS path_edges
 ORDER BY hop
-LIMIT ${limit};
+${limit_clause}
 EOF
 }
 
@@ -561,23 +590,41 @@ run_batch_report_test() {
 run_neighbor_query_test() {
   echo "Running dataset neighbor query test..."
 
-  local start end total=0
+  local start end cost total=0
 
   for hop in $(seq 1 "${QUERY_MAX_HOP}"); do
-    for limit in ${QUERY_LIMITS}; do
+    local limits_for_hop="${QUERY_LIMITS}"
+    if [ "${hop}" -le "${QUERY_UNLIMITED_MAX_HOP}" ]; then
+      limits_for_hop="${limits_for_hop} all"
+    fi
+
+    for limit in ${limits_for_hop}; do
       start=$(now_ms)
+      local limit_timed_out=0
 
       for i in $(seq 1 "${QUERY_TIMES}"); do
         local dataset_gid
         dataset_gid=$(random_dataset_gid)
         timed_cypher "dataset_neighbor_${hop}_hop_limit_${limit}" "${i}" 1 \
-          "$(query_dataset_neighbor "${dataset_gid}" "${hop}" "${limit}")"
+          "$(query_dataset_neighbor "${dataset_gid}" "${hop}" "${limit}")" \
+          "${QUERY_LIMIT_SKIP_SECONDS}" || true
         total=$((total + 1))
+        cost=$(($(now_ms) - start))
+        if [ "${cost}" -gt "$((QUERY_LIMIT_SKIP_SECONDS * 1000))" ]; then
+          limit_timed_out=1
+          echo "Stop dataset_neighbor ${hop} hop limit ${limit}: partial cost ${cost}ms exceeded ${QUERY_LIMIT_SKIP_SECONDS}s"
+          break
+        fi
       done
 
       end=$(now_ms)
+      cost=$((end - start))
       record_case "dataset_neighbor_${hop}_hop_limit_${limit}" "${QUERY_TIMES}" "$start" "$end" \
         "dataset_neighbor_${hop}_hop_limit_${limit}"
+      if [ "${limit_timed_out}" -eq 1 ] || [ "${cost}" -gt "$((QUERY_LIMIT_SKIP_SECONDS * 1000))" ]; then
+        echo "Skip remaining dataset_neighbor limits for ${hop} hop: limit ${limit} cost ${cost}ms exceeded ${QUERY_LIMIT_SKIP_SECONDS}s"
+        break
+      fi
     done
   done
 }
@@ -585,23 +632,41 @@ run_neighbor_query_test() {
 run_dataset_dataset_path_test() {
   echo "Running dataset->dataset path test..."
 
-  local start end
+  local start end cost
 
   for hop in $(seq 1 "${QUERY_MAX_HOP}"); do
-    for limit in ${QUERY_LIMITS}; do
+    local limits_for_hop="${QUERY_LIMITS}"
+    if [ "${hop}" -le "${QUERY_UNLIMITED_MAX_HOP}" ]; then
+      limits_for_hop="${limits_for_hop} all"
+    fi
+
+    for limit in ${limits_for_hop}; do
       start=$(now_ms)
+      local limit_timed_out=0
 
       for i in $(seq 1 "${QUERY_TIMES}"); do
         local src_gid dst_gid
         src_gid=$(random_dataset_gid)
         dst_gid=$(random_dataset_gid)
         timed_cypher "dataset_dataset_path_${hop}_hop_limit_${limit}" "${i}" 1 \
-          "$(query_dataset_dataset_path "${src_gid}" "${dst_gid}" "${hop}" "${limit}")"
+          "$(query_dataset_dataset_path "${src_gid}" "${dst_gid}" "${hop}" "${limit}")" \
+          "${QUERY_LIMIT_SKIP_SECONDS}" || true
+        cost=$(($(now_ms) - start))
+        if [ "${cost}" -gt "$((QUERY_LIMIT_SKIP_SECONDS * 1000))" ]; then
+          limit_timed_out=1
+          echo "Stop dataset_dataset_path ${hop} hop limit ${limit}: partial cost ${cost}ms exceeded ${QUERY_LIMIT_SKIP_SECONDS}s"
+          break
+        fi
       done
 
       end=$(now_ms)
+      cost=$((end - start))
       record_case "dataset_dataset_path_${hop}_hop_limit_${limit}" "${QUERY_TIMES}" "$start" "$end" \
         "dataset_dataset_path_${hop}_hop_limit_${limit}"
+      if [ "${limit_timed_out}" -eq 1 ] || [ "${cost}" -gt "$((QUERY_LIMIT_SKIP_SECONDS * 1000))" ]; then
+        echo "Skip remaining dataset_dataset_path limits for ${hop} hop: limit ${limit} cost ${cost}ms exceeded ${QUERY_LIMIT_SKIP_SECONDS}s"
+        break
+      fi
     done
   done
 }
@@ -609,23 +674,41 @@ run_dataset_dataset_path_test() {
 run_dataset_job_path_test() {
   echo "Running dataset->job path test..."
 
-  local start end
+  local start end cost
 
   for hop in $(seq 1 "${QUERY_MAX_HOP}"); do
-    for limit in ${QUERY_LIMITS}; do
+    local limits_for_hop="${QUERY_LIMITS}"
+    if [ "${hop}" -le "${QUERY_UNLIMITED_MAX_HOP}" ]; then
+      limits_for_hop="${limits_for_hop} all"
+    fi
+
+    for limit in ${limits_for_hop}; do
       start=$(now_ms)
+      local limit_timed_out=0
 
       for i in $(seq 1 "${QUERY_TIMES}"); do
         local dataset_gid job_gid
         dataset_gid=$(random_dataset_gid)
         job_gid=$(random_job_gid)
         timed_cypher "dataset_job_path_${hop}_hop_limit_${limit}" "${i}" 1 \
-          "$(query_dataset_job_path "${dataset_gid}" "${job_gid}" "${hop}" "${limit}")"
+          "$(query_dataset_job_path "${dataset_gid}" "${job_gid}" "${hop}" "${limit}")" \
+          "${QUERY_LIMIT_SKIP_SECONDS}" || true
+        cost=$(($(now_ms) - start))
+        if [ "${cost}" -gt "$((QUERY_LIMIT_SKIP_SECONDS * 1000))" ]; then
+          limit_timed_out=1
+          echo "Stop dataset_job_path ${hop} hop limit ${limit}: partial cost ${cost}ms exceeded ${QUERY_LIMIT_SKIP_SECONDS}s"
+          break
+        fi
       done
 
       end=$(now_ms)
+      cost=$((end - start))
       record_case "dataset_job_path_${hop}_hop_limit_${limit}" "${QUERY_TIMES}" "$start" "$end" \
         "dataset_job_path_${hop}_hop_limit_${limit}"
+      if [ "${limit_timed_out}" -eq 1 ] || [ "${cost}" -gt "$((QUERY_LIMIT_SKIP_SECONDS * 1000))" ]; then
+        echo "Skip remaining dataset_job_path limits for ${hop} hop: limit ${limit} cost ${cost}ms exceeded ${QUERY_LIMIT_SKIP_SECONDS}s"
+        break
+      fi
     done
   done
 }
@@ -654,6 +737,9 @@ main() {
     echo "TuGraph Perf Test Report"
     echo "run_id=${RUN_KEY}"
     echo "graph=${GRAPH}"
+    echo "query_limits=${QUERY_LIMITS}"
+    echo "query_limit_skip_seconds=${QUERY_LIMIT_SKIP_SECONDS}"
+    echo "query_unlimited_max_hop=${QUERY_UNLIMITED_MAX_HOP}"
     echo "start_time=$(date '+%Y-%m-%d %H:%M:%S')"
     echo
   } >> "${REPORT_FILE}"
