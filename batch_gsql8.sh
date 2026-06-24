@@ -30,8 +30,8 @@ EXPORT_XLSX=${EXPORT_XLSX:-1}
 XLSX_FILE=${XLSX_FILE:-${EXECUTION_FILE%.*}.xlsx}
 NODE_BIN=${NODE_BIN:-/Users/a747/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node}
 ARTIFACT_TOOL_NODE_MODULES=${ARTIFACT_TOOL_NODE_MODULES:-/Users/a747/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules}
-DATASET_GIDS=()
-JOB_GIDS=()
+DATASET_NAMES=()
+JOB_NAMES=()
 
 now_ms() {
   python3 -c 'import time; print(time.time_ns() // 1000000)'
@@ -301,7 +301,6 @@ single_report_cypher() {
 
   cat <<EOF
 CREATE (inDs${alias}:dataset {
-  gid: ${s}001,
   id: "ds_in_${s}",
   namespace: "perf",
   name: "table_in_${s}",
@@ -311,7 +310,6 @@ CREATE (inDs${alias}:dataset {
   owner: "perf_user"
 })
 CREATE (inDv${alias}:datasetversion {
-  gid: ${s}002,
   id: "dv_in_${s}",
   dataset_uuid: "ds_in_${s}",
   facets: "{}",
@@ -319,7 +317,6 @@ CREATE (inDv${alias}:datasetversion {
   owner: "perf_user"
 })
 CREATE (outDs${alias}:dataset {
-  gid: ${s}003,
   id: "ds_out_${s}",
   namespace: "perf",
   name: "table_out_${s}",
@@ -329,7 +326,6 @@ CREATE (outDs${alias}:dataset {
   owner: "perf_user"
 })
 CREATE (outDv${alias}:datasetversion {
-  gid: ${s}004,
   id: "dv_out_${s}",
   dataset_uuid: "ds_out_${s}",
   facets: "{}",
@@ -337,7 +333,6 @@ CREATE (outDv${alias}:datasetversion {
   owner: "perf_user"
 })
 CREATE (job${alias}:job {
-  gid: ${s}005,
   id: "job_${s}",
   namespace: "perf",
   name: "job_${s}",
@@ -348,14 +343,12 @@ CREATE (job${alias}:job {
   owner: "perf_user"
 })
 CREATE (jv${alias}:jobversion {
-  gid: ${s}006,
   id: "jv_${s}",
   job_uuid: "job_${s}",
   facets: "{}",
   owner: "perf_user"
 })
 CREATE (run${alias}:jobrun {
-  gid: ${s}007,
   id: "run_${s}",
   state: "SUCCESS",
   namespace: "perf",
@@ -397,6 +390,31 @@ cypher_string_literal() {
   jq -Rn --arg value "$1" '$value'
 }
 
+extract_query_values() {
+  awk '
+    BEGIN { FS = "|" }
+    function trim(value) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      return value
+    }
+    /^[[:space:]]*$/ { next }
+    /^\+/ { next }
+    /\|/ {
+      for (i = 1; i <= NF; i++) {
+        value = trim($i)
+        if (value == "" || value == "name" || value ~ /^-+$/) next
+        print value
+      }
+      next
+    }
+    {
+      value = trim($0)
+      if (value == "" || value == "name" || value ~ /^-+$/) next
+      print value
+    }
+  '
+}
+
 run_cypher_body() {
   local cypher="$1"
 
@@ -407,43 +425,44 @@ load_query_samples() {
   local dataset_body job_body
 
   echo "Loading random query sample pools..."
-  dataset_body=$(run_cypher_body "MATCH (d:dataset) WHERE d.gid IS NOT NULL RETURN d.gid LIMIT ${QUERY_SAMPLE_SIZE};")
-  job_body=$(run_cypher_body "MATCH (j:job) WHERE j.gid IS NOT NULL RETURN j.gid LIMIT ${QUERY_SAMPLE_SIZE};")
+  dataset_body=$(run_cypher_body "MATCH (d:dataset) WHERE d.name IS NOT NULL RETURN d.name AS name LIMIT ${QUERY_SAMPLE_SIZE};")
+  job_body=$(run_cypher_body "MATCH (j:job) WHERE j.name IS NOT NULL RETURN j.name AS name LIMIT ${QUERY_SAMPLE_SIZE};")
 
-  DATASET_GIDS=()
-  while IFS= read -r gid; do
-    [ -n "${gid}" ] && DATASET_GIDS+=("${gid}")
-  done < <(printf '%s\n' "${dataset_body}" | awk '/^-?[0-9]+$/ { print; next } /\|/ { for (i = 1; i <= NF; i++) if ($i ~ /^-?[0-9]+$/) print $i }' | head -n "${QUERY_SAMPLE_SIZE}")
+  DATASET_NAMES=()
+  while IFS= read -r name; do
+    [ -n "${name}" ] && DATASET_NAMES+=("${name}")
+  done < <(printf '%s\n' "${dataset_body}" | extract_query_values | head -n "${QUERY_SAMPLE_SIZE}")
 
-  JOB_GIDS=()
-  while IFS= read -r gid; do
-    [ -n "${gid}" ] && JOB_GIDS+=("${gid}")
-  done < <(printf '%s\n' "${job_body}" | awk '/^-?[0-9]+$/ { print; next } /\|/ { for (i = 1; i <= NF; i++) if ($i ~ /^-?[0-9]+$/) print $i }' | head -n "${QUERY_SAMPLE_SIZE}")
+  JOB_NAMES=()
+  while IFS= read -r name; do
+    [ -n "${name}" ] && JOB_NAMES+=("${name}")
+  done < <(printf '%s\n' "${job_body}" | extract_query_values | head -n "${QUERY_SAMPLE_SIZE}")
 
-  if [ "${#DATASET_GIDS[@]}" -eq 0 ] || [ "${#JOB_GIDS[@]}" -eq 0 ]; then
+  if [ "${#DATASET_NAMES[@]}" -eq 0 ] || [ "${#JOB_NAMES[@]}" -eq 0 ]; then
     printf 'Failed to load query samples: dataset_count=%d job_count=%d\n' \
-      "${#DATASET_GIDS[@]}" "${#JOB_GIDS[@]}" >&2
+      "${#DATASET_NAMES[@]}" "${#JOB_NAMES[@]}" >&2
     return 1
   fi
 
   printf 'Loaded query samples: dataset_count=%d job_count=%d\n' \
-    "${#DATASET_GIDS[@]}" "${#JOB_GIDS[@]}"
+    "${#DATASET_NAMES[@]}" "${#JOB_NAMES[@]}"
 }
 
-random_dataset_gid() {
-  printf '%s' "${DATASET_GIDS[$((RANDOM % ${#DATASET_GIDS[@]}))]}"
+random_dataset_name() {
+  printf '%s' "${DATASET_NAMES[$((RANDOM % ${#DATASET_NAMES[@]}))]}"
 }
 
-random_job_gid() {
-  printf '%s' "${JOB_GIDS[$((RANDOM % ${#JOB_GIDS[@]}))]}"
+random_job_name() {
+  printf '%s' "${JOB_NAMES[$((RANDOM % ${#JOB_NAMES[@]}))]}"
 }
 
 query_dataset_neighbor() {
-  local gid="$1"
+  local name="$1"
   local hop="$2"
   local limit="$3"
   local limit_clause=""
   local pattern=""
+  local name_literal
 
   if [ "${limit}" != "all" ]; then
     limit_clause="LIMIT ${limit};"
@@ -452,47 +471,54 @@ query_dataset_neighbor() {
   for i in $(seq 1 "${hop}"); do
     pattern="${pattern}-[:lineage]->(j${i}:job)-[:lineage]->(n${i}:dataset)"
   done
+  name_literal=$(cypher_string_literal "${name}")
 
   cat <<EOF
-MATCH p = (d:dataset {gid: ${gid}})${pattern}
-RETURN ${hop} AS hop, d.gid AS source_gid, n${hop}.gid AS target_gid, n${hop}.id AS target_id, n${hop}.name AS target_name
+MATCH p = (d:dataset {name: ${name_literal}})${pattern}
+RETURN ${hop} AS hop, d.name AS source_name, n${hop}.name AS target_name, n${hop}.id AS target_id
 ${limit_clause}
 EOF
 }
 
 query_dataset_dataset_path() {
-  local src_gid="$1"
-  local dst_gid="$2"
+  local src_name="$1"
+  local dst_name="$2"
   local hop="$3"
   local limit="$4"
   local limit_clause=""
+  local src_name_literal dst_name_literal
 
   if [ "${limit}" != "all" ]; then
     limit_clause="LIMIT ${limit};"
   fi
+  src_name_literal=$(cypher_string_literal "${src_name}")
+  dst_name_literal=$(cypher_string_literal "${dst_name}")
 
   cat <<EOF
-MATCH p = (src:dataset {gid: ${src_gid}})-[:lineage*1..${hop}]-(dst:dataset {gid: ${dst_gid}})
-RETURN length(p) AS hop, src.gid AS src_gid, dst.gid AS dst_gid, src.id AS src_id, dst.id AS dst_id, nodes(p) AS path_nodes, relationships(p) AS path_edges
+MATCH p = (src:dataset {name: ${src_name_literal}})-[:lineage*1..${hop}]-(dst:dataset {name: ${dst_name_literal}})
+RETURN length(p) AS hop, src.name AS src_name, dst.name AS dst_name, src.id AS src_id, dst.id AS dst_id, nodes(p) AS path_nodes, relationships(p) AS path_edges
 ORDER BY hop
 ${limit_clause}
 EOF
 }
 
 query_dataset_job_path() {
-  local dataset_gid="$1"
-  local job_gid="$2"
+  local dataset_name="$1"
+  local job_name="$2"
   local hop="$3"
   local limit="$4"
   local limit_clause=""
+  local dataset_name_literal job_name_literal
 
   if [ "${limit}" != "all" ]; then
     limit_clause="LIMIT ${limit};"
   fi
+  dataset_name_literal=$(cypher_string_literal "${dataset_name}")
+  job_name_literal=$(cypher_string_literal "${job_name}")
 
   cat <<EOF
-MATCH p = (d:dataset {gid: ${dataset_gid}})-[:lineage*1..${hop}]-(j:job {gid: ${job_gid}})
-RETURN length(p) AS hop, d.gid AS dataset_gid, j.gid AS job_gid, d.id AS dataset_id, j.id AS job_id, nodes(p) AS path_nodes, relationships(p) AS path_edges
+MATCH p = (d:dataset {name: ${dataset_name_literal}})-[:lineage*1..${hop}]-(j:job {name: ${job_name_literal}})
+RETURN length(p) AS hop, d.name AS dataset_name, j.name AS job_name, d.id AS dataset_id, j.id AS job_id, nodes(p) AS path_nodes, relationships(p) AS path_edges
 ORDER BY hop
 ${limit_clause}
 EOF
@@ -623,10 +649,10 @@ run_neighbor_query_test() {
       local limit_timed_out=0
 
       for i in $(seq 1 "${QUERY_TIMES}"); do
-        local dataset_gid
-        dataset_gid=$(random_dataset_gid)
+        local dataset_name
+        dataset_name=$(random_dataset_name)
         timed_cypher "dataset_neighbor_${hop}_hop_limit_${limit}" "${i}" 1 \
-          "$(query_dataset_neighbor "${dataset_gid}" "${hop}" "${limit}")" \
+          "$(query_dataset_neighbor "${dataset_name}" "${hop}" "${limit}")" \
           "${QUERY_LIMIT_SKIP_SECONDS}" || true
         total=$((total + 1))
         cost=$(($(now_ms) - start))
@@ -665,11 +691,11 @@ run_dataset_dataset_path_test() {
       local limit_timed_out=0
 
       for i in $(seq 1 "${QUERY_TIMES}"); do
-        local src_gid dst_gid
-        src_gid=$(random_dataset_gid)
-        dst_gid=$(random_dataset_gid)
+        local src_name dst_name
+        src_name=$(random_dataset_name)
+        dst_name=$(random_dataset_name)
         timed_cypher "dataset_dataset_path_${hop}_hop_limit_${limit}" "${i}" 1 \
-          "$(query_dataset_dataset_path "${src_gid}" "${dst_gid}" "${hop}" "${limit}")" \
+          "$(query_dataset_dataset_path "${src_name}" "${dst_name}" "${hop}" "${limit}")" \
           "${QUERY_LIMIT_SKIP_SECONDS}" || true
         cost=$(($(now_ms) - start))
         if [ "${cost}" -gt "$((QUERY_LIMIT_SKIP_SECONDS * 1000))" ]; then
@@ -707,11 +733,11 @@ run_dataset_job_path_test() {
       local limit_timed_out=0
 
       for i in $(seq 1 "${QUERY_TIMES}"); do
-        local dataset_gid job_gid
-        dataset_gid=$(random_dataset_gid)
-        job_gid=$(random_job_gid)
+        local dataset_name job_name
+        dataset_name=$(random_dataset_name)
+        job_name=$(random_job_name)
         timed_cypher "dataset_job_path_${hop}_hop_limit_${limit}" "${i}" 1 \
-          "$(query_dataset_job_path "${dataset_gid}" "${job_gid}" "${hop}" "${limit}")" \
+          "$(query_dataset_job_path "${dataset_name}" "${job_name}" "${hop}" "${limit}")" \
           "${QUERY_LIMIT_SKIP_SECONDS}" || true
         cost=$(($(now_ms) - start))
         if [ "${cost}" -gt "$((QUERY_LIMIT_SKIP_SECONDS * 1000))" ]; then
