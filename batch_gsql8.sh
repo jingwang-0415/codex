@@ -4,6 +4,7 @@ set -euo pipefail
 GSQL_BIN=${GSQL_BIN:-gsql}
 GSQL_ARGS=${GSQL_ARGS:--d postgres -p 7999 -r}
 PROGRESS=${PROGRESS:-1}
+GSQL_LOG_MAX_LINES=${GSQL_LOG_MAX_LINES:-30}
 GRAPH_PATH=${GRAPH_PATH:-test_dl3kw}
 
 SINGLE_TIMES=${SINGLE_TIMES:-100}
@@ -35,6 +36,24 @@ JOB_NAMES=()
 
 now_ms() {
   python3 -c 'import time; print(time.time_ns() // 1000000)'
+}
+
+capture_gsql_output() {
+  local output_file="$1"
+  local line_count=0
+
+  while IFS= read -r line; do
+    printf '%s\n' "${line}" >> "${output_file}"
+    if [ "${GSQL_LOG_MAX_LINES}" -le 0 ] || [ "${line_count}" -lt "${GSQL_LOG_MAX_LINES}" ]; then
+      printf '%s\n' "${line}" >> "${LOG_FILE}"
+    fi
+    line_count=$((line_count + 1))
+  done
+
+  if [ "${GSQL_LOG_MAX_LINES}" -gt 0 ] && [ "${line_count}" -gt "${GSQL_LOG_MAX_LINES}" ]; then
+    printf '[%s] gsql output truncated in log: kept %d of %d lines\n' \
+      "$(date '+%Y-%m-%d %H:%M:%S')" "${GSQL_LOG_MAX_LINES}" "${line_count}" >> "${LOG_FILE}"
+  fi
 }
 
 make_suffix() {
@@ -70,11 +89,11 @@ run_gsql_file_to_output() {
   timeout_bin=$(timeout_command)
   if [ -n "${max_time}" ] && [ -n "${timeout_bin}" ]; then
     "${timeout_bin}" "${max_time}" "${GSQL_BIN}" "${gsql_args[@]}" -f "${script_file}" \
-      > >(tee -a "${LOG_FILE}" > "${output_file}") 2>&1
+      > >(capture_gsql_output "${output_file}") 2>&1
     status=$?
   else
     "${GSQL_BIN}" "${gsql_args[@]}" -f "${script_file}" \
-      > >(tee -a "${LOG_FILE}" > "${output_file}") 2>&1
+      > >(capture_gsql_output "${output_file}") 2>&1
     status=$?
   fi
 
@@ -144,11 +163,11 @@ run_cypher() {
   start=$(now_ms)
   if [ -n "${max_time}" ] && [ -n "${timeout_bin}" ]; then
     "${timeout_bin}" "${max_time}" "${GSQL_BIN}" "${gsql_args[@]}" -f "${script_file}" \
-      > >(tee -a "${LOG_FILE}" > "${output_file}") 2>&1
+      > >(capture_gsql_output "${output_file}") 2>&1
     status=$?
   else
     "${GSQL_BIN}" "${gsql_args[@]}" -f "${script_file}" \
-      > >(tee -a "${LOG_FILE}" > "${output_file}") 2>&1
+      > >(capture_gsql_output "${output_file}") 2>&1
     status=$?
   fi
   end=$(now_ms)
@@ -788,6 +807,7 @@ main() {
     echo "log_file=${LOG_FILE}"
     echo "gsql_bin=${GSQL_BIN}"
     echo "gsql_args=${GSQL_ARGS}"
+    echo "gsql_log_max_lines=${GSQL_LOG_MAX_LINES}"
     echo "progress=${PROGRESS}"
     echo "graph_path=${GRAPH_PATH}"
     echo "query_limits=${QUERY_LIMITS}"
