@@ -41,9 +41,25 @@ make_suffix() {
 
 check_gsql_bin() {
   if [[ "${GSQL_BIN}" == */* ]]; then
-    [ -x "${GSQL_BIN}" ]
+    if [ ! -x "${GSQL_BIN}" ]; then
+      printf 'Cannot execute GSQL_BIN=%s. Please set GSQL_BIN to the gsql8 executable path.\n' "${GSQL_BIN}" >&2
+      return 127
+    fi
   else
-    command -v "${GSQL_BIN}" >/dev/null
+    if ! command -v "${GSQL_BIN}" >/dev/null; then
+      printf 'Cannot find %s in PATH. Please run with GSQL_BIN=/path/to/gsql8 %s.\n' \
+        "${GSQL_BIN}" "$0" >&2
+      return 127
+    fi
+  fi
+}
+
+require_command() {
+  local command_name="$1"
+
+  if ! command -v "${command_name}" >/dev/null; then
+    printf 'Cannot find required command: %s\n' "${command_name}" >&2
+    return 127
   fi
 }
 
@@ -656,8 +672,8 @@ run_dataset_job_path_test() {
 main() {
   local script_start script_end script_cost run_cypher_stats
 
-  command -v jq >/dev/null
-  command -v python3 >/dev/null
+  require_command jq
+  require_command python3
   check_gsql_bin
 
   script_start=$(now_ms)
