@@ -3,7 +3,6 @@ set -euo pipefail
 
 GSQL_BIN=${GSQL_BIN:-gsql}
 GSQL_ARGS=${GSQL_ARGS:--d postgres -p 7999 -r}
-GSQL_C_MAX_CHARS=${GSQL_C_MAX_CHARS:-100000}
 PROGRESS=${PROGRESS:-1}
 GRAPH_PATH=${GRAPH_PATH:-test_dl3kw}
 
@@ -58,39 +57,28 @@ check_gsql_bin() {
   fi
 }
 
-run_gsql_command() {
-  local gsql_command="$1"
-  local gsql_args=() script_file status
+run_gsql_file_to_output() {
+  local script_file="$1"
+  local output_file="$2"
+  local max_time="${3:-}"
+  local gsql_args=() timeout_bin status
 
   if [ -n "${GSQL_ARGS}" ]; then
     read -r -a gsql_args <<< "${GSQL_ARGS}"
   fi
 
-  if [ "${#gsql_command}" -le "${GSQL_C_MAX_CHARS:-100000}" ]; then
-    "${GSQL_BIN}" "${gsql_args[@]}" -c "${gsql_command}"
-    return
-  fi
-
-  script_file=$(mktemp "${TMPDIR:-/tmp}/batch_gsql8.sql.XXXXXX")
-  printf '%s\n' "${gsql_command}" > "${script_file}"
-  if "${GSQL_BIN}" "${gsql_args[@]}" -f "${script_file}"; then
-    status=0
+  timeout_bin=$(timeout_command)
+  if [ -n "${max_time}" ] && [ -n "${timeout_bin}" ]; then
+    "${timeout_bin}" "${max_time}" "${GSQL_BIN}" "${gsql_args[@]}" -f "${script_file}" \
+      > >(tee -a "${LOG_FILE}" > "${output_file}") 2>&1
+    status=$?
   else
+    "${GSQL_BIN}" "${gsql_args[@]}" -f "${script_file}" \
+      > >(tee -a "${LOG_FILE}" > "${output_file}") 2>&1
     status=$?
   fi
-  rm -f "${script_file}"
+
   return "${status}"
-}
-
-run_gsql_file() {
-  local script_file="$1"
-  local gsql_args=()
-
-  if [ -n "${GSQL_ARGS}" ]; then
-    read -r -a gsql_args <<< "${GSQL_ARGS}"
-  fi
-
-  "${GSQL_BIN}" "${gsql_args[@]}" -f "${script_file}"
 }
 
 require_command() {
@@ -119,51 +107,63 @@ build_gsql_command() {
 execute_gsql() {
   local cypher="$1"
   local max_time="${2:-}"
-  local gsql_command output_file script_file timeout_bin status
+  local gsql_command output_file script_file status
 
   output_file=$(mktemp "${TMPDIR:-/tmp}/batch_gsql8.out.XXXXXX")
   gsql_command=$(build_gsql_command "${cypher}")
+  script_file=$(mktemp "${TMPDIR:-/tmp}/batch_gsql8.sql.XXXXXX")
+  printf '%s\n' "${gsql_command}" > "${script_file}"
 
-  timeout_bin=$(timeout_command)
   set +e
-  if [ -n "${max_time}" ] && [ -n "${timeout_bin}" ] && [ "${#gsql_command}" -gt "${GSQL_C_MAX_CHARS}" ]; then
-    script_file=$(mktemp "${TMPDIR:-/tmp}/batch_gsql8.sql.XXXXXX")
-    printf '%s\n' "${gsql_command}" > "${script_file}"
-    "${timeout_bin}" "${max_time}" bash -c "$(declare -f run_gsql_file); GSQL_BIN=\$1; GSQL_ARGS=\$2; run_gsql_file \"\$3\"" \
-      _ "${GSQL_BIN}" "${GSQL_ARGS}" "${script_file}" > "${output_file}" 2>&1
-    status=$?
-    rm -f "${script_file}"
-  elif [ -n "${max_time}" ] && [ -n "${timeout_bin}" ]; then
-    "${timeout_bin}" "${max_time}" bash -c "$(declare -f run_gsql_command); GSQL_BIN=\$1; GSQL_ARGS=\$2; GSQL_C_MAX_CHARS=\$3; run_gsql_command \"\$4\"" \
-      _ "${GSQL_BIN}" "${GSQL_ARGS}" "${GSQL_C_MAX_CHARS}" "${gsql_command}" > "${output_file}" 2>&1
-    status=$?
-  else
-    run_gsql_command "${gsql_command}" > "${output_file}" 2>&1
-    status=$?
-  fi
+  run_gsql_file_to_output "${script_file}" "${output_file}" "${max_time}"
+  status=$?
   set -e
 
   cat "${output_file}"
-  rm -f "${output_file}"
+  rm -f "${script_file}" "${output_file}"
   return "${status}"
 }
 
 run_cypher() {
   local cypher="$1"
   local max_time="${2:-}"
-  local start end gsql_total_ms output
+  local start end gsql_total_ms output output_file script_file gsql_command status
+  local gsql_args=() timeout_bin
 
+  output_file=$(mktemp "${TMPDIR:-/tmp}/batch_gsql8.out.XXXXXX")
+  script_file=$(mktemp "${TMPDIR:-/tmp}/batch_gsql8.sql.XXXXXX")
+  gsql_command=$(build_gsql_command "${cypher}")
+  printf '%s\n' "${gsql_command}" > "${script_file}"
+  if [ -n "${GSQL_ARGS}" ]; then
+    read -r -a gsql_args <<< "${GSQL_ARGS}"
+  fi
+  timeout_bin=$(timeout_command)
+
+  status=0
+  set +e
   start=$(now_ms)
-  if ! output=$(execute_gsql "${cypher}" "${max_time}"); then
-    end=$(now_ms)
-    gsql_total_ms=$(awk -v cost="$((end - start))" 'BEGIN { printf "%.3f", cost }')
+  if [ -n "${max_time}" ] && [ -n "${timeout_bin}" ]; then
+    "${timeout_bin}" "${max_time}" "${GSQL_BIN}" "${gsql_args[@]}" -f "${script_file}" \
+      > >(tee -a "${LOG_FILE}" > "${output_file}") 2>&1
+    status=$?
+  else
+    "${GSQL_BIN}" "${gsql_args[@]}" -f "${script_file}" \
+      > >(tee -a "${LOG_FILE}" > "${output_file}") 2>&1
+    status=$?
+  fi
+  end=$(now_ms)
+  set -e
+
+  gsql_total_ms=$(awk -v cost="$((end - start))" 'BEGIN { printf "%.3f", cost }')
+  output=$(cat "${output_file}")
+  rm -f "${script_file}" "${output_file}"
+
+  if [ "${status}" -ne 0 ]; then
     printf '0 %.3f 0' "${gsql_total_ms}"
     printf 'Cypher failed through gsql8. Output:\n%s\n' "${output}" >&2
     return 1
   fi
-  end=$(now_ms)
 
-  gsql_total_ms=$(awk -v cost="$((end - start))" 'BEGIN { printf "%.3f", cost }')
   printf '%.3f %.3f 0' "${gsql_total_ms}" "${gsql_total_ms}"
 }
 
@@ -740,6 +740,8 @@ main() {
   require_command python3
   check_gsql_bin
 
+  : >> "${LOG_FILE}"
+  progress_log "RUN_START run_id=${RUN_KEY} report=${REPORT_FILE} log=${LOG_FILE}"
   script_start=$(now_ms)
 
   if [ ! -f "${EXECUTION_FILE}" ]; then
@@ -758,7 +760,6 @@ main() {
     echo "log_file=${LOG_FILE}"
     echo "gsql_bin=${GSQL_BIN}"
     echo "gsql_args=${GSQL_ARGS}"
-    echo "gsql_c_max_chars=${GSQL_C_MAX_CHARS}"
     echo "progress=${PROGRESS}"
     echo "graph_path=${GRAPH_PATH}"
     echo "query_limits=${QUERY_LIMITS}"
@@ -799,6 +800,7 @@ main() {
 
   export_execution_xlsx
 
+  progress_log "RUN_END run_id=${RUN_KEY} total_cost_ms=${script_cost} report=${REPORT_FILE}"
   echo "Done. Report: ${REPORT_FILE}"
   echo "Log: ${LOG_FILE}"
   echo "Execution detail: ${EXECUTION_FILE}"
