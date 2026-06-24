@@ -301,62 +301,59 @@ single_report_cypher() {
 
   cat <<EOF
 CREATE (inDs${alias}:dataset {
-  id: "ds_in_${s}",
-  namespace: "perf",
-  name: "table_in_${s}",
-  current_version: "dv_in_${s}",
+  namespace: 'perf',
+  name: 'table_in_${s}',
+  current_version: 'dv_in_${s}',
   created_at: ${ts},
   updated_at: ${ts},
-  owner: "perf_user"
+  owner: 'perf_user'
 })
 CREATE (inDv${alias}:datasetversion {
-  id: "dv_in_${s}",
-  dataset_uuid: "ds_in_${s}",
-  facets: "{}",
+  name: 'dv_in_${s}',
+  dataset_uuid: 'ds_in_${s}',
+  facets: '{}',
   created_at: ${ts},
-  owner: "perf_user"
+  owner: 'perf_user'
 })
 CREATE (outDs${alias}:dataset {
-  id: "ds_out_${s}",
-  namespace: "perf",
-  name: "table_out_${s}",
-  current_version: "dv_out_${s}",
+  namespace: 'perf',
+  name: 'table_out_${s}',
+  current_version: 'dv_out_${s}',
   created_at: ${ts},
   updated_at: ${ts},
-  owner: "perf_user"
+  owner: 'perf_user'
 })
 CREATE (outDv${alias}:datasetversion {
-  id: "dv_out_${s}",
-  dataset_uuid: "ds_out_${s}",
-  facets: "{}",
+  name: 'dv_out_${s}',
+  dataset_uuid: 'ds_out_${s}',
+  facets: '{}',
   created_at: ${ts},
-  owner: "perf_user"
+  owner: 'perf_user'
 })
 CREATE (job${alias}:job {
-  id: "job_${s}",
-  namespace: "perf",
-  name: "job_${s}",
-  current_version: "jv_${s}",
-  current_run: "run_${s}",
+  namespace: 'perf',
+  name: 'job_${s}',
+  current_version: 'jv_${s}',
+  current_run: 'run_${s}',
   created_at: ${ts},
   updated_at: ${ts},
-  owner: "perf_user"
+  owner: 'perf_user'
 })
 CREATE (jv${alias}:jobversion {
-  id: "jv_${s}",
-  job_uuid: "job_${s}",
-  facets: "{}",
-  owner: "perf_user"
+  name: 'jv_${s}',
+  job_uuid: 'job_${s}',
+  facets: '{}',
+  owner: 'perf_user'
 })
 CREATE (run${alias}:jobrun {
-  id: "run_${s}",
-  state: "SUCCESS",
-  namespace: "perf",
-  facets: "{}",
+  name: 'run_${s}',
+  state: 'SUCCESS',
+  namespace: 'perf',
+  facets: '{}',
   created_at: ${ts},
   updated_at: ${ts},
-  owner: "perf_user",
-  jobversion_id: "jv_${s}"
+  owner: 'perf_user',
+  jobversion_name: 'jv_${s}'
 })
 CREATE (inDs${alias})-[:has_dversion {created_at: ${ts}}]->(inDv${alias})
 CREATE (outDs${alias})-[:has_dversion {created_at: ${ts}}]->(outDv${alias})
@@ -366,7 +363,7 @@ CREATE (inDv${alias})-[:consumes_by {created_at: ${ts}}]->(run${alias})
 CREATE (run${alias})-[:produces {created_at: ${ts}}]->(outDv${alias})
 CREATE (inDs${alias})-[:lineage]->(job${alias})
 CREATE (job${alias})-[:lineage]->(outDs${alias})
-RETURN run${alias}.id;
+RETURN run${alias}.name;
 EOF
 }
 
@@ -480,7 +477,7 @@ query_dataset_neighbor() {
 
   cat <<EOF
 MATCH p = (d:dataset {name: ${name_literal}})${pattern}
-RETURN ${hop} AS hop, d.name AS source_name, n${hop}.name AS target_name, n${hop}.id AS target_id
+RETURN ${hop} AS hop, d.name AS source_name, n${hop}.name AS target_name
 ${limit_clause}
 EOF
 }
@@ -501,7 +498,7 @@ query_dataset_dataset_path() {
 
   cat <<EOF
 MATCH p = (src:dataset {name: ${src_name_literal}})-[:lineage*1..${hop}]-(dst:dataset {name: ${dst_name_literal}})
-RETURN length(p) AS hop, src.name AS src_name, dst.name AS dst_name, src.id AS src_id, dst.id AS dst_id, nodes(p) AS path_nodes, relationships(p) AS path_edges
+RETURN length(p) AS hop, src.name AS src_name, dst.name AS dst_name, nodes(p) AS path_nodes, relationships(p) AS path_edges
 ORDER BY hop
 ${limit_clause}
 EOF
@@ -523,7 +520,7 @@ query_dataset_job_path() {
 
   cat <<EOF
 MATCH p = (d:dataset {name: ${dataset_name_literal}})-[:lineage*1..${hop}]-(j:job {name: ${job_name_literal}})
-RETURN length(p) AS hop, d.name AS dataset_name, j.name AS job_name, d.id AS dataset_id, j.id AS job_id, nodes(p) AS path_nodes, relationships(p) AS path_edges
+RETURN length(p) AS hop, d.name AS dataset_name, j.name AS job_name, nodes(p) AS path_nodes, relationships(p) AS path_edges
 ORDER BY hop
 ${limit_clause}
 EOF
