@@ -2,9 +2,10 @@
 set -euo pipefail
 
 GSQL_BIN=${GSQL_BIN:-gsql}
-GSQL_ARGS=${GSQL_ARGS:--d postgres -p 7999 -r}
+GSQL_ARGS=${GSQL_ARGS:--d postgres -p 6889 -r}
 PROGRESS=${PROGRESS:-1}
 GSQL_LOG_MAX_LINES=${GSQL_LOG_MAX_LINES:-30}
+CYPHER_LOG_MAX_LINES=${CYPHER_LOG_MAX_LINES:-30}
 GRAPH_PATH=${GRAPH_PATH:-test_dl3kw}
 
 SINGLE_TIMES=${SINGLE_TIMES:-100}
@@ -56,6 +57,32 @@ capture_gsql_output() {
   fi
 }
 
+log_gsql_script() {
+  local script_file="$1"
+  local line_count
+
+  if [ "${PROGRESS}" != "1" ]; then
+    return 0
+  fi
+
+  line_count=$(wc -l < "${script_file}" | tr -d ' ')
+  {
+    printf '[%s] CYPHER_BEGIN file=%s lines=%s\n' \
+      "$(date '+%Y-%m-%d %H:%M:%S')" "${script_file}" "${line_count}"
+    if [ "${CYPHER_LOG_MAX_LINES}" -le 0 ]; then
+      cat "${script_file}"
+    else
+      sed -n "1,${CYPHER_LOG_MAX_LINES}p" "${script_file}"
+      if [ "${line_count}" -gt "${CYPHER_LOG_MAX_LINES}" ]; then
+        printf '[%s] cypher script truncated in log: kept %d of %d lines\n' \
+          "$(date '+%Y-%m-%d %H:%M:%S')" "${CYPHER_LOG_MAX_LINES}" "${line_count}"
+      fi
+    fi
+    printf '[%s] CYPHER_END file=%s\n' \
+      "$(date '+%Y-%m-%d %H:%M:%S')" "${script_file}"
+  } >> "${LOG_FILE}"
+}
+
 make_suffix() {
   local sequence="$1"
   printf '%s%06d' "${RUN_ID}" "${sequence}"
@@ -65,7 +92,7 @@ check_gsql_bin() {
   local output gsql_args=()
 
   if [ -n "${GSQL_ARGS}" ]; then
-    # Split simple command-line args such as: -d postgres -p 7999 -r
+    # Split simple command-line args such as: -d postgres -p 6889 -r
     read -r -a gsql_args <<< "${GSQL_ARGS}"
   fi
 
@@ -132,6 +159,7 @@ execute_gsql() {
   gsql_command=$(build_gsql_command "${cypher}")
   script_file=$(mktemp "${TMPDIR:-/tmp}/batch_gsql8.sql.XXXXXX")
   printf '%s\n' "${gsql_command}" > "${script_file}"
+  log_gsql_script "${script_file}"
 
   set +e
   run_gsql_file_to_output "${script_file}" "${output_file}" "${max_time}"
@@ -153,6 +181,7 @@ run_cypher() {
   script_file=$(mktemp "${TMPDIR:-/tmp}/batch_gsql8.sql.XXXXXX")
   gsql_command=$(build_gsql_command "${cypher}")
   printf '%s\n' "${gsql_command}" > "${script_file}"
+  log_gsql_script "${script_file}"
   if [ -n "${GSQL_ARGS}" ]; then
     read -r -a gsql_args <<< "${GSQL_ARGS}"
   fi
@@ -808,6 +837,7 @@ main() {
     echo "gsql_bin=${GSQL_BIN}"
     echo "gsql_args=${GSQL_ARGS}"
     echo "gsql_log_max_lines=${GSQL_LOG_MAX_LINES}"
+    echo "cypher_log_max_lines=${CYPHER_LOG_MAX_LINES}"
     echo "progress=${PROGRESS}"
     echo "graph_path=${GRAPH_PATH}"
     echo "query_limits=${QUERY_LIMITS}"
