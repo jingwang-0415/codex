@@ -6,7 +6,7 @@ GSQL_ARGS=${GSQL_ARGS:--d postgres -p 6889 -r}
 PROGRESS=${PROGRESS:-1}
 GSQL_LOG_MAX_LINES=${GSQL_LOG_MAX_LINES:-30}
 CYPHER_LOG_MAX_LINES=${CYPHER_LOG_MAX_LINES:-30}
-GRAPH_PATH=${GRAPH_PATH:-test_dl3kw}
+GRAPH_PATH=${GRAPH_PATH:-test0625.test_3kw}
 
 SINGLE_TIMES=${SINGLE_TIMES:-100}
 CONCURRENT_THREADS=${CONCURRENT_THREADS:-20}
@@ -147,7 +147,7 @@ timeout_command() {
 build_gsql_command() {
   local cypher="$1"
 
-  printf 'set graph_path=%s; %s' "${GRAPH_PATH}" "${cypher}"
+  printf 'set graph_path = "%s"; %s' "${GRAPH_PATH}" "${cypher}"
 }
 
 execute_gsql() {
