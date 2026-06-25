@@ -268,6 +268,21 @@ progress_log() {
   printf '%s\n' "${line}" >> "${LOG_FILE}"
 }
 
+csv_escape_multiline() {
+  awk '
+    BEGIN { first = 1 }
+    {
+      gsub(/\r/, "")
+      gsub(/"/, "\"\"")
+      if (!first) {
+        printf "\\n"
+      }
+      printf "%s", $0
+      first = 0
+    }
+  '
+}
+
 timed_cypher() {
   local case_name="$1"
   local sequence="$2"
@@ -286,8 +301,7 @@ timed_cypher() {
   read -r db_elapsed_ms gsql_total_ms client_overhead_ms <<< "${timing}"
   progress_log "END phase=${phase} case=${case_name} sequence=${sequence} status=${status} elapsed_ms=${gsql_total_ms}"
 
-  cypher_csv=$(printf '%s' "${cypher}" | jq -Rs \
-    'gsub("\\r"; "") | gsub("\\n"; "\\n") | gsub("\""; "\"\"")')
+  cypher_csv=$(printf '%s' "${cypher}" | csv_escape_multiline)
   append_execution_row "$(printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"%s"' \
     "${RUN_KEY}" "${started_at}" "${phase}" "${case_name}" "${sequence}" \
     "${units}" "${db_elapsed_ms}" "${gsql_total_ms}" "${client_overhead_ms}" "${status}" \
@@ -812,7 +826,6 @@ run_dataset_job_path_test() {
 main() {
   local script_start script_end script_cost run_cypher_stats
 
-  require_command jq
   require_command python3
   check_gsql_bin
 
