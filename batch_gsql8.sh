@@ -429,22 +429,6 @@ RETURN run${alias}.name;
 EOF
 }
 
-batch_report_cypher() {
-  local batch="$1"
-  local batch_size="${2:-${BATCH_SIZE}}"
-  local cypher=""
-  for i in $(seq 1 "${batch_size}"); do
-    local s report
-    s=$(make_suffix "$((batch + i))")
-    report=$(single_report_cypher "$s" "_${i}")
-    cypher="${cypher}
-$(printf '%s\n' "${report}" | sed '$d')
-"
-  done
-
-  printf '%s\nRETURN %d AS created;\n' "$cypher" "${batch_size}"
-}
-
 cypher_string_literal() {
   local value="$1"
 
@@ -663,12 +647,15 @@ run_concurrent_batch_report_test() {
 
   for t in $(seq 1 "${CONCURRENT_THREADS}"); do
     (
-      local i=1 sequence batch_start
+      local i=1 sequence batch_start item s
       while [ "$(now_ms)" -lt "${deadline}" ]; do
-        sequence=$((300000 + (t - 1) * 5000 + i))
         batch_start=$((400000 + (t - 1) * 25000 + (i - 1) * CONCURRENT_BATCH_SIZE))
-        timed_cypher "concurrent_batch_report" "${sequence}" "${CONCURRENT_BATCH_SIZE}" \
-          "$(batch_report_cypher "${batch_start}" "${CONCURRENT_BATCH_SIZE}")" || true
+        for item in $(seq 1 "${CONCURRENT_BATCH_SIZE}"); do
+          sequence=$((batch_start + item))
+          s=$(make_suffix "${sequence}")
+          timed_cypher "concurrent_batch_report" "${sequence}" 1 \
+            "$(single_report_cypher "$s")" || true
+        done
         i=$((i + 1))
       done
     ) &
@@ -684,12 +671,16 @@ run_concurrent_batch_report_test() {
 run_batch_report_test() {
   echo "Running batch report test..."
 
-  local start end s
+  local start end batch_start sequence item s
 
   start=$(now_ms)
   for i in $(seq 1 "${BATCH_TIMES}"); do
-    s=$((200000 + (i - 1) * BATCH_SIZE))
-    timed_cypher "batch_report" "${i}" "${BATCH_SIZE}" "$(batch_report_cypher "$s")"
+    batch_start=$((200000 + (i - 1) * BATCH_SIZE))
+    for item in $(seq 1 "${BATCH_SIZE}"); do
+      sequence=$((batch_start + item))
+      s=$(make_suffix "${sequence}")
+      timed_cypher "batch_report" "${sequence}" 1 "$(single_report_cypher "$s")"
+    done
   done
   end=$(now_ms)
 
