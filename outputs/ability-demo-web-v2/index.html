@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>能力汇报 · 聚焦演示 V2</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<main>
+  <section class="slide cover-simple">
+    <h1>向前一步，<br>行稳致远</h1>
+    <div class="cover-meta">汇报人：【姓名】<br>汇报时间：2026.07</div>
+  </section>
+
+  <section class="slide">
+    <div class="header">
+      <div class="title">个人简介：稳扎稳打，在挑战中快速成长</div>
+    </div>
+    <div class="content">
+      <div class="growth-layout">
+        <div class="photo-box" data-photo-shell>
+          <img data-image="profilePhoto" alt="个人照片" hidden>
+          <span>个人照片<br>预留区域</span>
+        </div>
+        <div class="ability-timeline">
+          <div class="timeline-axis">
+            <span class="axis-start">入职</span>
+            <span class="axis-end">当前</span>
+          </div>
+          <div class="ability-lane foundation">
+            <div class="ability-lane-meta"><strong>初试羽翼</strong><b>设计先行</b></div>
+            <div class="ability-lane-track">
+              <div class="ability-band"></div>
+              <p>把关键问题解决在开发前</p>
+            </div>
+          </div>
+          <div class="ability-lane independent">
+            <div class="ability-lane-meta"><strong>独当一面</strong><b>精进不止</b></div>
+            <div class="ability-lane-track">
+              <div class="ability-band"></div>
+              <p>向下解决根因，向外沉淀方法</p>
+            </div>
+          </div>
+          <div class="ability-lane collaboration">
+            <div class="ability-lane-meta"><strong>团队协同</strong><b>协同破局</b></div>
+            <div class="ability-lane-track">
+              <div class="ability-band"></div>
+              <p>向外求证，向内解耦</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="header">
+      <div class="title chapter-title">
+        <span class="chapter-index">01 初试羽翼</span>
+        <span class="chapter-separator">｜</span>
+        <span class="chapter-main">设计先行：把关键问题解决在开发前，支撑高质量交付</span>
+      </div>
+    </div>
+    <div class="content">
+      <div class="case-grid">
+        <div class="case-brief">
+          面向数据湖与 AI 场景，建设统一的元数据管理架构，并提供语义检索能力。方案需兼容现有 DTE 模型、传统 JDBC 接入和 Iceberg 生态接口，贯通 DTE、DME、LCS 三个系统，并满足亿级元数据秒级查询要求。
+        </div>
+        <div class="case-columns">
+          <div class="case-card">
+            <h3><span>01</span>统一架构与职责边界</h3>
+            <div class="case-challenge"><strong>挑战：</strong>三种生态模型差异明显，三个系统职责相互关联，容易形成多套模型、重复适配和数据归属模糊。</div>
+            <div class="case-actions">
+              <strong>我的做法</strong>
+              <ul>
+                <li>抽象核心对象，建立三类生态与统一模型的映射规则</li>
+                <li>借助 AI 推演新增生态、模型升级与存量兼容，补齐职责边界</li>
+              </ul>
+            </div>
+            <div class="effect-box">
+              <div class="model-flow">
+                <div class="flow-stack">
+                  <div class="flow-pill">DTE 独立模型</div>
+                  <div class="flow-pill">JDBC 独立模型</div>
+                  <div class="flow-pill">Iceberg 独立模型</div>
+                </div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-core">统一核心模型<br>DTE / DME / LCS</div>
+              </div>
+            </div>
+            <div class="case-effect"><strong>效果：</strong>三套模型收敛为一套核心模型；新增生态由改造核心链路转变为增加适配层。</div>
+          </div>
+
+          <div class="case-card">
+            <h3><span>02</span>跨系统数据一致性</h3>
+            <div class="case-challenge"><strong>挑战：</strong>跨系统链路可能出现写入失败、状态异常和数据差异；亿级数据无法依赖高成本的常态化全量对账。</div>
+            <div class="case-actions">
+              <strong>我的做法</strong>
+              <ul>
+                <li>明确元数据事实来源和责任系统，守住各自一致性边界</li>
+                <li>借助 AI 枚举失败、超时和极端异常，补齐阻断与恢复路径</li>
+              </ul>
+            </div>
+            <div class="effect-box">
+              <div class="consistency-model">
+                <div class="consistency-row"><strong>正常运行</strong><span>系统内数据与状态自洽</span><em>边界清晰</em></div>
+                <div class="consistency-row"><strong>链路异常</strong><span>失败、超时立即反馈</span><em>阻断扩散</em></div>
+                <div class="consistency-row"><strong>极端异常</strong><span>事实源定向修复</span><em>校验恢复</em></div>
+              </div>
+            </div>
+            <div class="case-effect"><strong>效果：</strong>数据归属清晰，异常能够及时阻断，并依据事实源完成定向修复。</div>
+          </div>
+
+          <div class="case-card">
+            <h3><span>03</span>亿级元数据查询性能</h3>
+            <div class="case-challenge"><strong>挑战：</strong>亿级数据同时承载精确、全文和语义检索，容易出现 Mapping 膨胀、查询范围过大和响应波动。</div>
+            <div class="case-actions">
+              <strong>我的做法</strong>
+              <ul>
+                <li>按查询与更新粒度拆分 Index，以显式 Mapping 控制字段增长</li>
+                <li>人工设计业务场景，借助 AI 生成测试数据与脚本</li>
+              </ul>
+            </div>
+            <div class="effect-box">
+              <div class="metric-table">
+                <div class="head">指标</div><div class="head">优化前</div><div class="head">优化后</div>
+                <div>精确查询</div><div>≤ 5 ms</div><div class="optimized-value">≤ 5 ms<span class="metric-note stable">保持稳定</span></div>
+                <div>文本检索</div><div>59.51 ms</div><div class="optimized-value">21.77 ms<span class="metric-note">耗时降低 63%</span></div>
+                <div>全文检索</div><div>332.75 ms</div><div class="optimized-value">78.00 ms<span class="metric-note">耗时降低 77%</span></div>
+              </div>
+            </div>
+            <div class="case-effect"><strong>效果：</strong>精确查询保持稳定，文本与全文检索耗时分别降低 63% 和 77%。</div>
+          </div>
+        </div>
+        <div class="case-footer-line chapter-conclusion">
+          <strong>高质即高量</strong>
+          <span>越早把边界想清、把风险验证清、把异常兜底想清，开发过程越聚焦，交付结果越稳定。</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="header">
+      <div class="title chapter-title">
+        <span class="chapter-index">02 独当一面</span>
+        <span class="chapter-separator">｜</span>
+        <span class="chapter-main">精进不止：向下解决根因，向外沉淀方法</span>
+      </div>
+    </div>
+    <div class="content">
+      <div class="optimization-page">
+        <div class="optimization-columns">
+          <div class="optimization-case">
+            <div class="optimization-head"><span>技术向深</span><h3>从查询瓶颈反推图结构设计</h3></div>
+            <div class="optimization-logic four-steps">
+              <div class="logic-step"><strong>业务表现</strong>复杂关联查询时延未达预期</div>
+              <div class="logic-step"><strong>性能瓶颈</strong>多跳遍历引发路径空间扩张</div>
+              <div class="logic-step"><strong>核心矛盾</strong>通用扩展能力与高频查询效率之间存在权衡</div>
+              <div class="logic-step"><strong>演进方向</strong>面向核心查询路径，优化图模型及数据组织方式</div>
+            </div>
+            <div class="optimization-visual">
+              <div class="visual-caption">完整结构对比：聚焦主查询路径变化</div>
+              <div class="image-compare">
+                <figure class="replaceable-figure">
+                  <div class="replaceable-image">
+                    <img class="swap-image" data-image="graphBefore" src="assets/images/graph-before.svg" alt="优化前图结构与查询路径" onerror="this.removeAttribute('src')">
+                    <div class="image-placeholder"><strong>优化前图片</strong><span>原图结构 / 查询路径</span></div>
+                  </div>
+                  <figcaption>优化前｜多跳关系</figcaption>
+                </figure>
+                <figure class="replaceable-figure">
+                  <div class="replaceable-image">
+                    <img class="swap-image" data-image="graphAfter" src="assets/images/graph-after.svg" alt="优化后图结构与查询路径" onerror="this.removeAttribute('src')">
+                    <div class="image-placeholder"><strong>优化后图片</strong><span>重构后结构 / 查询路径</span></div>
+                  </div>
+                  <figcaption>优化后｜核心链路</figcaption>
+                </figure>
+              </div>
+            </div>
+            <div class="optimization-result">
+              <div class="metric-result"><strong>50%</strong>复杂查询跳数减少</div>
+              <div class="metric-result"><strong>100%</strong>查询速度提升</div>
+            </div>
+          </div>
+
+          <div class="optimization-case outward-case">
+            <div class="optimization-head"><span>方法向外</span><h3>从个人响应到跨团队共建</h3></div>
+            <div class="optimization-visual evolution-visual">
+              <div class="visual-caption">定位能力演进路径</div>
+              <div class="capability-evolution">
+                <div class="evolution-stage evolution-manual">
+                  <div class="evolution-label"><b>01</b><strong>人工响应</strong></div>
+                  <div class="evolution-body">
+                    <div class="evolution-flow three-nodes">
+                      <span>所有问题</span><i>→</i><span class="focus">接口人</span><i>→</i><span>逐一答疑</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="evolution-stage evolution-reuse">
+                  <div class="evolution-label"><b>02</b><strong>组内复用</strong></div>
+                  <div class="evolution-body evolution-lanes">
+                    <div class="evolution-lane">
+                      <b>常见</b>
+                      <div class="evolution-flow three-nodes">
+                        <span>成员</span><i>→</i><span class="ai">AI 定位 Skill</span><i>→</i><span>标准排查</span>
+                      </div>
+                    </div>
+                    <div class="evolution-lane">
+                      <b>疑难</b>
+                      <div class="evolution-flow three-nodes">
+                        <span>问题升级</span><i>→</i><span class="focus">接口人判断</span><i>→</i><span>结论回写</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="evolution-stage evolution-public">
+                  <div class="evolution-label"><b>03</b><strong>跨团队共建</strong></div>
+                  <div class="evolution-body">
+                    <div class="evolution-flow four-nodes">
+                      <span>共性问题</span><i>→</i><span>北斗 MCP<br>统一流程</span><i>→</i><span class="public">公共能力</span><i>→</i><span>团队试点</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="evolution-feedback">试点反馈回流，持续完善公共能力与统一定位流程</div>
+              </div>
+            </div>
+            <div class="optimization-result">
+              <div class="metric-result"><strong>3 类</strong>常见定位问题覆盖</div>
+              <div class="metric-result"><strong>30 → 10 分钟</strong>平均定位时间</div>
+            </div>
+          </div>
+        </div>
+        <div class="optimization-footer chapter-conclusion">
+          <strong>优化即复利</strong>
+          <span>越能从表象追到根因、把经验沉淀为方法，后续解决同类问题的重复投入越少，一次实践产生的价值越持久。</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="header">
+      <div class="title chapter-title">
+        <span class="chapter-index">03 团队协同</span>
+        <span class="chapter-separator">｜</span>
+        <span class="chapter-main">协同破局：向外求证，向内解耦</span>
+      </div>
+    </div>
+    <div class="content">
+      <div class="collab-page">
+        <div class="collab-viewpoint">
+          复杂协作的难点，不只是参与方多，而是关键事实拿不到、上游方案等不起。
+        </div>
+
+        <div class="dependency-map">
+          <div class="dependency-row">
+            <div class="dependency-label">技术依赖</div>
+            <div class="dependency-chain">
+              <div class="dependency-node">平台</div><b>→</b>
+              <div class="dependency-node gv">底层 GV</div>
+              <em>能力直接依赖</em>
+            </div>
+          </div>
+          <div class="dependency-row">
+            <div class="dependency-label">协调链路</div>
+            <div class="dependency-chain">
+              <div class="dependency-node">平台</div><b>→</b>
+              <div class="dependency-node">产品</div><b>→</b>
+              <div class="dependency-node">昊天</div><b>→</b>
+              <div class="dependency-node gv">底层 GV</div>
+              <em>无法直接对接</em>
+            </div>
+          </div>
+        </div>
+
+        <div class="closure-lanes">
+          <div class="closure-lane">
+            <div class="lane-title"><strong>向外求证</strong><span>性能规格风险</span></div>
+            <div class="lane-flow">
+              <div class="lane-step">
+                <small>风险识别</small>
+                <b>业界打榜数据 ≠ 真实业务负载</b>
+                <em>GV 630TR5 的现有报告不足以支撑规格判断</em>
+              </div>
+              <div class="lane-arrow">→</div>
+              <div class="lane-step action">
+                <small>我的动作</small>
+                <b>构造真实业务数据，推动产品经昊天协调 GV 环境完成实测</b>
+              </div>
+              <div class="lane-arrow">→</div>
+              <div class="lane-step result">
+                <small>推进结果</small>
+                <b>以实测校准需求规格</b>
+                <em>确认 GaussVector 无法满足原诉求，提前识别 <span class="red">3 项性能问题、2 项功能缺口</span>，推动产品调整原始规格</em>
+              </div>
+            </div>
+          </div>
+
+          <div class="closure-lane">
+            <div class="lane-title"><strong>向内解耦</strong><span>业务场景风险</span></div>
+            <div class="lane-flow">
+              <div class="lane-step">
+                <small>风险识别</small>
+                <b>鉴权分域场景未定，方案持续变化</b>
+                <em>后续 <span class="red">10+ 接口</span> 面临整体等待</em>
+              </div>
+              <div class="lane-arrow">→</div>
+              <div class="lane-step action">
+                <small>我的动作</small>
+                <b>一边推动产品明确方案，一边 Mock 未明确环节并行开发</b>
+              </div>
+              <div class="lane-arrow">→</div>
+              <div class="lane-step result">
+                <small>推进结果</small>
+                <b>解除对上游方案的同步等待</b>
+                <em><span class="red">10+ 接口</span> 持续开发</em>
+              </div>
+            </div>
+          </div>
+
+          <div class="delivery-convergence">
+            <span>规格有依据</span><b>+</b><span>开发不停步</span><b>→</b><b>需求如期完整转测</b>
+          </div>
+        </div>
+
+        <div class="collab-footer chapter-conclusion">
+          <strong>协同不是同步，而是创造推进条件</strong>
+          <span>用实测收敛判断，用解耦创造并行，让复杂协作从等待转向推进。</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="header">
+      <div class="title">且行且思：在实践中积累，在反思中前行</div>
+    </div>
+    <div class="content">
+      <div class="summary-page">
+        <div class="summary-columns">
+          <div class="summary-card">
+            <div class="summary-card-head">
+              <span>01 · 初试羽翼</span>
+              <h3>高质量交付</h3>
+              <p>把关键问题解决在开发前</p>
+            </div>
+            <div class="summary-card-body">
+              <strong class="summary-section-label">已有积累</strong>
+              <div class="summary-shift"><span>需求执行</span><b>→</b><span>设计判断</span></div>
+              <p>开始把架构边界、异常场景和验证路径前置，并借助 AI 补充设计遗漏。</p>
+            </div>
+            <div class="summary-card-next">
+              <strong>下一步精进</strong>
+              <b>跨域视野与方案取舍</b>
+              <p>持续扩展跨域知识，提升复杂方案的比较与取舍能力。</p>
+              <div class="summary-gap-tags"><span>知识广度</span><span>方案取舍</span></div>
+            </div>
+          </div>
+
+          <div class="summary-card">
+            <div class="summary-card-head">
+              <span>02 · 独当一面</span>
+              <h3>优化与沉淀</h3>
+              <p>从解决一个问题到减少一类问题</p>
+            </div>
+            <div class="summary-card-body">
+              <strong class="summary-section-label">已有积累</strong>
+              <div class="summary-shift"><span>单点解决</span><b>→</b><span>根因优化</span></div>
+              <p>能够从性能表象追到结构根因，并将重复定位经验抽象为 AI Skill。</p>
+            </div>
+            <div class="summary-card-next">
+              <strong>下一步精进</strong>
+              <b>方法抽象与经验传递</b>
+              <p>提升方法抽象的通用性，让经验更易理解、更易复用。</p>
+              <div class="summary-gap-tags"><span>方法抽象</span><span>经验传递</span></div>
+            </div>
+          </div>
+
+          <div class="summary-card">
+            <div class="summary-card-head">
+              <span>03 · 团队协同</span>
+              <h3>协同推进</h3>
+              <p>向外求证，向内解耦</p>
+            </div>
+            <div class="summary-card-body">
+              <strong class="summary-section-label">已有积累</strong>
+              <div class="summary-shift"><span>个人任务</span><b>→</b><span>协同闭环</span></div>
+              <p>能够识别跨组依赖中的关键风险，用实测和 Mock 建立可验证、可并行的推进路径。</p>
+            </div>
+            <div class="summary-card-next">
+              <strong>下一步精进</strong>
+              <b>全局规划与节奏掌控</b>
+              <p>强化跨方节奏预判与共识建立，将风险进一步前置。</p>
+              <div class="summary-gap-tags"><span>节奏预判</span><span>共识构建</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+<div class="deck-progress" aria-hidden="true"><span></span></div>
+<nav class="deck-controls" aria-label="幻灯片控制">
+  <button class="deck-btn" type="button" data-action="prev" aria-label="上一页" title="上一页">←</button>
+  <div class="deck-dots" aria-label="页面导航"></div>
+  <span class="deck-counter" aria-live="polite"><b>1</b><i>/</i><span>6</span></span>
+  <button class="deck-btn" type="button" data-action="next" aria-label="下一页" title="下一页">→</button>
+  <button class="deck-btn" type="button" data-action="fullscreen" aria-label="切换全屏" title="切换全屏">⛶</button>
+</nav>
+<script src="deck-config.js" defer></script>
+<script src="app.js" defer></script>
+</body>
+</html>
