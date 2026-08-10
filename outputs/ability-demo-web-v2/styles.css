@@ -888,39 +888,68 @@
     }
 
     .cover-simple {
-      padding: 54px 64px 44px;
-      display: grid;
-      grid-template-rows: 1fr auto;
-      justify-items: center;
+      padding: 0;
+      display: block;
       background: #fff;
-      box-shadow: inset 0 -7px 0 var(--red);
     }
 
     .cover-simple::after {
-      display: none;
+      display: block;
+      width: 104px;
+      height: 104px;
+      top: 0;
+      right: 0;
+      background: var(--red);
+      clip-path: polygon(34% 0, 100% 0, 100% 66%);
+      opacity: 1;
     }
 
     .cover-simple h1 {
-      align-self: center;
-      width: 100%;
+      position: absolute;
+      left: 176px;
+      top: 148px;
+      width: 520px;
       margin: 0;
-      font-size: 52px;
-      line-height: 1.24;
+      font-size: 54px;
+      line-height: 1.15;
       letter-spacing: 0;
       font-weight: 700;
-      text-align: center;
+      text-align: left;
+    }
+
+    .cover-simple h1 span,
+    .cover-simple h1 strong {
+      display: block;
+    }
+
+    .cover-simple h1 strong {
+      margin-top: 10px;
+      margin-left: 88px;
+      color: var(--red);
+      font-weight: 700;
     }
 
     .cover-simple .cover-meta {
-      justify-self: center;
-      min-width: 240px;
+      position: absolute;
+      right: 72px;
+      bottom: 52px;
+      min-width: 250px;
       border-left: 0;
-      border-top: 3px solid var(--red);
-      padding: 12px 20px 0;
+      border-top: 0;
+      padding: 0;
       font-size: 12px;
-      line-height: 1.8;
+      line-height: 1.9;
       color: #333;
-      text-align: center;
+      text-align: right;
+    }
+
+    .cover-simple .cover-meta::before {
+      content: "";
+      display: block;
+      width: 56px;
+      height: 3px;
+      margin: 0 0 10px auto;
+      background: var(--red);
     }
 
     .intro-layout {
