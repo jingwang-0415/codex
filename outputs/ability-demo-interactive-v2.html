@@ -895,28 +895,39 @@
     }
 
     .cover-simple {
-      padding: 58px 64px 42px;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      background:
-        linear-gradient(90deg, #fff 0%, #fff 58%, var(--red-bg) 58%, #fff 100%);
+      padding: 54px 64px 44px;
+      display: grid;
+      grid-template-rows: 1fr auto;
+      justify-items: center;
+      background: #fff;
+      box-shadow: inset 0 -7px 0 var(--red);
+    }
+
+    .cover-simple::after {
+      display: none;
     }
 
     .cover-simple h1 {
+      align-self: center;
+      width: 100%;
       margin: 0;
-      font-size: 42px;
-      line-height: 1.3;
+      font-size: 52px;
+      line-height: 1.24;
       letter-spacing: 0;
       font-weight: 700;
+      text-align: center;
     }
 
     .cover-simple .cover-meta {
-      border-left: 4px solid var(--red);
-      padding-left: 12px;
+      justify-self: center;
+      min-width: 240px;
+      border-left: 0;
+      border-top: 3px solid var(--red);
+      padding: 12px 20px 0;
       font-size: 12px;
       line-height: 1.8;
       color: #333;
+      text-align: center;
     }
 
     .intro-layout {
