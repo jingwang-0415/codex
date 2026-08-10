@@ -2090,7 +2090,7 @@
     .capability-evolution {
       display: grid;
       align-content: center;
-      gap: 8px;
+      gap: 12px;
       min-height: 0;
     }
 
@@ -2107,8 +2107,14 @@
       content: "↓";
       position: absolute;
       z-index: 2;
-      left: 29px;
+      left: 34px;
       bottom: -11px;
+      width: 16px;
+      height: 10px;
+      display: grid;
+      place-items: center;
+      transform: translateX(-50%);
+      background: #fff;
       color: var(--red);
       font-size: 10px;
       line-height: 1;
@@ -2182,7 +2188,19 @@
     }
 
     .evolution-flow.four-nodes {
-      grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
+      grid-template-columns: minmax(0, .9fr) 14px minmax(0, 1.15fr) 14px minmax(0, .9fr) 14px minmax(0, .9fr);
+      gap: 2px;
+    }
+
+    .evolution-flow.four-nodes i {
+      align-self: stretch;
+      width: 14px;
+      min-width: 14px;
+      display: grid;
+      place-items: center;
+      position: relative;
+      z-index: 1;
+      background: #fff;
     }
 
     .evolution-flow span {
