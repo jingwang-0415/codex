@@ -1389,6 +1389,210 @@
       --start: 58%;
       --band: #333333;
     }
++
+    .profile-timeline-layout {
+      display: grid;
+      grid-template-columns: 170px minmax(0, 1fr);
+      gap: 28px;
+      width: 100%;
+      height: 100%;
+      align-items: stretch;
+    }
+
+    .profile-photo-column {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .profile-photo-column .photo-box {
+      height: 214px;
+    }
+
+    .profile-caption {
+      border-left: 4px solid var(--red);
+      padding: 8px 0 8px 10px;
+      color: #555;
+      font-size: 11px;
+      line-height: 1.55;
+    }
+
+    .profile-caption strong {
+      display: block;
+      color: var(--black);
+      font-size: 13px;
+      margin-bottom: 3px;
+    }
+
+    .career-timeline {
+      display: grid;
+      grid-template-rows: auto 126px 1fr;
+      gap: 12px;
+      min-width: 0;
+      height: 100%;
+    }
+
+    .timeline-section-label {
+      color: var(--red);
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    .career-track {
+      position: relative;
+      padding-top: 40px;
+    }
+
+    .career-origin {
+      position: absolute;
+      left: 0;
+      top: 0;
+      color: #444;
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .career-origin strong {
+      display: block;
+      color: var(--red);
+      font-size: 12px;
+      margin-bottom: 2px;
+    }
+
+    .career-now {
+      position: absolute;
+      right: 0;
+      top: 14px;
+      color: var(--red);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .career-axis {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 46px;
+      height: 1px;
+      background: var(--gray-3);
+    }
+
+    .career-axis::after {
+      content: "";
+      position: absolute;
+      right: -1px;
+      top: -4px;
+      border-left: 8px solid var(--red);
+      border-top: 4px solid transparent;
+      border-bottom: 4px solid transparent;
+    }
+
+    .career-stages {
+      display: grid;
+      grid-template-columns: 36fr 46fr 18fr;
+      gap: 5px;
+      margin-top: 18px;
+    }
+
+    .career-stage {
+      min-width: 0;
+      height: 68px;
+      padding: 9px 10px;
+      background: var(--gray-1);
+      border-top: 5px solid var(--gray-3);
+    }
+
+    .career-stage.owner {
+      background: var(--red-bg);
+      border-top-color: var(--red);
+    }
+
+    .career-stage.collaboration {
+      background: #EFEFEF;
+      border-top-color: #333;
+    }
+
+    .career-stage time {
+      display: block;
+      color: #666;
+      font-size: 10px;
+      line-height: 1.2;
+      margin-bottom: 5px;
+      white-space: nowrap;
+    }
+
+    .career-stage strong {
+      display: block;
+      color: var(--black);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .career-stage.owner strong {
+      color: var(--red);
+    }
+
+    .honor-area {
+      border-top: 1px solid var(--gray-2);
+      padding-top: 10px;
+      min-height: 0;
+    }
+
+    .honor-timeline {
+      display: grid;
+      grid-template-columns: 1.35fr .72fr 1.45fr;
+      margin-top: 9px;
+      height: 182px;
+    }
+
+    .honor-year {
+      padding: 0 13px;
+      border-left: 1px solid var(--gray-2);
+      min-width: 0;
+    }
+
+    .honor-year:first-child {
+      padding-left: 0;
+      border-left: 0;
+    }
+
+    .honor-year:last-child {
+      padding-right: 0;
+    }
+
+    .honor-year h3 {
+      margin: 0 0 8px;
+      color: var(--red);
+      font-size: 16px;
+      line-height: 1;
+    }
+
+    .honor-item {
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      gap: 7px;
+      padding: 5px 0;
+      border-top: .5px solid #E7E7E7;
+      color: #333;
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .honor-item:first-of-type {
+      border-top: 0;
+    }
+
+    .honor-item time {
+      color: #777;
+      font-weight: 700;
+    }
+
+    .honor-item strong {
+      color: var(--black);
+      font-weight: 700;
+    }
+
 
     .case-grid {
       display: grid;
