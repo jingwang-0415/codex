@@ -42,7 +42,7 @@
     };
 
     const revealDefinitions = [
-      { slideIndex: 1, groupSelector: '.career-timeline', itemSelector: '.career-stage, .honor-year' },
+      { slideIndex: 1, groupSelector: '.rise-chart', itemSelector: '.rise-node, .rise-honor' },
       { slideIndex: 2, groupSelector: '.case-columns', itemSelector: '.case-card' },
       { slideIndex: 3, groupSelector: '.optimization-columns', itemSelector: '.optimization-case' },
       { slideIndex: 4, groupSelector: '.closure-lanes', itemSelector: '.closure-lane, .delivery-convergence' },
