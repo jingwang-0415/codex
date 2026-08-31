@@ -1,0 +1,52 @@
+@startuml
+!pragma layout smetana
+title +1 场景视图：统一接入与亿级元数据检索
+
+left to right direction
+skinparam shadowing false
+skinparam packageStyle rectangle
+skinparam componentStyle rectangle
+skinparam defaultTextAlignment center
+
+actor "Gravitino\n生态客户端" as gravitino
+actor "Iceberg\n生态客户端" as iceberg
+actor "内部产品 / 用户" as internal
+actor "平台管理员" as admin
+
+rectangle "统一元数据平台" {
+  usecase "UC1 协议兼容接入\n创建 / 更新 / 查询元数据" as UC1
+  usecase "UC2 层级导航\ncatalog → schema → dataset/table" as UC2
+  usecase "UC3 精确查询\nID / name / owner" as UC3
+  usecase "UC4 文本与全文检索\n属性 / 注释 / 描述 / 文档" as UC4
+  usecase "UC5 标签筛选\nkey:value + 对象关系" as UC5
+  usecase "UC6 自定义 Key 查询\n动态模板受控扩展" as UC6
+  usecase "UC7 索引治理\nKey 准入 / 配额 / 容量 / 重建" as UC7
+}
+
+gravitino --> UC1
+gravitino --> UC2
+iceberg --> UC1
+iceberg --> UC2
+internal --> UC1
+internal --> UC2
+internal --> UC3
+internal --> UC4
+internal --> UC5
+internal --> UC6
+admin --> UC7
+
+UC1 .> UC7 : 元数据变更触发索引更新
+UC6 .> UC7 : 新 Key 需经过治理
+
+note bottom of UC3
+目标规模：亿级元数据
+目标时延：秒级检索
+具体 P95/P99、并发量待压测后定稿
+end note
+
+note bottom of UC7
+Mapping Key 达上限时：
+拒绝继续动态映射，冷 Key 降级为固定 KV 结构；
+不影响已有索引和基础查询
+end note
+@enduml

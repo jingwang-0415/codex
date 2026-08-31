@@ -1,0 +1,72 @@
+@startuml
+title 进程视图：统一抽象入口、工厂选源与混合索引
+
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+autonumber
+
+actor "外部/内部调用方" as client
+participant "生态入口实现\nGravitino/Iceberg/..." as entry
+participant "AbstractMetadataEntry\n统一入口模板" as abstractEntry
+participant "模型映射/校验" as mapper
+participant "Command Service" as command
+participant "DataSourceFactory" as factory
+database "具体 MetadataDataSource" as source
+database "Outbox" as outbox
+queue "消息总线" as mq
+participant "Index Worker" as worker
+participant "Mapping 治理" as gov
+database "六类索引" as indexes
+participant "Query Service / Planner" as query
+
+== 元数据写入与增量索引 ==
+client -> entry : create / update / delete
+entry -> abstractEntry : execute(request)
+abstractEntry -> mapper : 公共校验 + 生态对象转换
+mapper -> command : 统一内部命令
+command -> factory : create(type, config)
+factory --> command : 返回目标数据源
+command -> source : 写事实数据（含 version）
+command -> outbox : 同事务记录 MetadataChanged
+command --> client : 返回 objectId + version
+outbox -> mq : 异步投递（可重试）
+mq -> worker : 按 objectId/分区消费
+worker -> factory : 获取索引 / 回源数据源
+factory --> worker : 返回具体数据源
+worker -> source : 按 version 读取最新快照
+worker -> gov : 检查自定义 Key 准入、类型和配额
+alt Key 已准入且未达 Mapping 上限
+  gov --> worker : 使用动态模板映射
+else 冷 Key / 未准入 / 已达上限
+  gov --> worker : 转为固定 schema KV；禁止新增 Mapping
+end
+worker -> indexes : 按粒度更新目标索引（幂等，外部版本控制）
+
+== 查询与结果聚合 ==
+client -> entry : search(condition, page, sort)
+entry -> abstractEntry : execute(request)
+abstractEntry -> query : 统一 Query
+alt 层级导航 / ID / name / owner
+  query -> indexes : catalog/schema 或目标对象索引
+else 文本 / 全文
+  query -> indexes : dataset/table 核心对象索引
+else 标签 key:value
+  query -> indexes : tags 定位 tagId
+  query -> indexes : tags-relation 定位 objectId
+else 自定义 Key
+  query -> gov : 查询 Key 是否已提升
+  gov --> query : Mapping 字段或固定 KV 查询计划
+  query -> indexes : 目标对象索引
+end
+indexes --> query : objectId + score/sortKey + indexVersion
+query -> factory : 获取详情数据源
+factory --> query : 返回具体数据源
+query -> source : 批量回源（按需）
+source --> query : 对象详情
+query --> client : 去重、权限过滤、排序、游标分页结果
+
+note over factory,source
+工厂只负责选择与创建；
+具体读写语义由统一数据源抽象及其实现负责。
+end note
+@enduml

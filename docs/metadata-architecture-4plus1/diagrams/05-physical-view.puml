@@ -1,0 +1,86 @@
+@startuml
+!pragma layout smetana
+title 物理视图：可水平扩展的元数据与检索部署
+
+left to right direction
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam nodeStyle rectangle
+
+cloud "Gravitino / Iceberg / 内部客户端" as clients
+
+node "接入区" {
+  [API Gateway / LB] as gateway
+}
+
+node "无状态服务集群（可水平扩展）" {
+  [Metadata API × N] as api
+  [Query Service × N] as query
+  [Schema/Key Admin × N] as admin
+}
+
+node "异步计算区" {
+  queue "消息总线\n按 objectId hash 分区" as mq
+  [Index Worker × N] as workers
+  [Reindex / Backfill Job] as reindex
+}
+
+node "结构化元数据存储" {
+  database "StarRocks Cluster\n结构化事实 / 聚合（按部署选型）" as sr
+}
+
+node "湖仓与历史层" {
+  database "Iceberg Tables\n批量、版本、归档、生态互操作" as iceberg
+  folder "Object Storage" as objectStore
+}
+
+node "在线检索集群" {
+  database "OpenSearch Cluster" as os
+  artifact "catalog-* / schema-*\ndataset-* / table-*\ntags-* / tags-relation-*" as indexSet
+  artifact "版本化模板 + 写别名/读别名" as aliases
+}
+
+node "管控与可观测" {
+  [配置/Key 注册中心] as registry
+  [Metrics / Logs / Traces] as obs
+}
+
+clients --> gateway
+gateway --> api : 写入 / 详情
+gateway --> query : 检索
+gateway --> admin : Key 申请 / 模板管理
+api --> sr
+api --> iceberg : 可选事实源实现
+api --> mq : 事务 Outbox/CDC 后投递
+mq --> workers
+workers --> sr : 读取最新对象
+workers --> iceberg : 批量读取 / 回放
+workers --> os : 增量建索引
+reindex --> sr
+reindex --> iceberg
+reindex --> os : 新版本索引 → 校验 → 切别名
+os -- indexSet
+os -- aliases
+iceberg -- objectStore
+admin --> registry
+workers --> registry : 模板与 Key 配额
+query --> registry
+query --> os : 在线检索
+query --> sr : 详情回源 / 结构化查询
+query --> iceberg : 离线或历史查询
+api ..> obs
+query ..> obs
+workers ..> obs
+os ..> obs
+
+note bottom of os
+分片键优先考虑 tenant/product + objectType；
+具体 shard 数、replica 数、refresh_interval
+必须由数据分布、写入吞吐和查询压测确定。
+end note
+
+note bottom of registry
+后端角色通过 DataSourceFactory 与配置选择；
+此图给出推荐组合，不要求三个后端完全同构互换。
+end note
+@enduml
