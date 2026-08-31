@@ -1,105 +1,92 @@
 @startuml
 !pragma layout smetana
-title 逻辑视图：统一抽象入口、内部模型与数据源工厂
+title 逻辑视图：统一内部结构驱动索引存储与数据源下放
 
 top to bottom direction
 skinparam shadowing false
 skinparam packageStyle rectangle
 skinparam componentStyle rectangle
+skinparam defaultTextAlignment center
+skinparam ArrowColor #666666
+skinparam ArrowThickness 1.2
 
-package "生态入口框架" {
-  component "AbstractMetadataEntry\n<<abstract>>\n统一入口契约与公共流程" as abstractEntry
-  component "GravitinoEntry" as gravEntry
-  component "IcebergEntry" as iceEntry
-  component "InternalEntry" as intEntry
+package "① 外部接口适配层" as layer1 #F3F6FA {
+  together {
+    component "Gravitino API" as gravApi
+    component "Iceberg Catalog / REST" as iceApi
+    component "内部接口" as internalApi
+  }
+
+  component "AbstractMetadataEntry\n<<abstract>>\n统一入口契约与公共逻辑" as abstractEntry
+
+  together {
+    component "GravitinoEntry" as gravEntry
+    component "IcebergEntry" as iceEntry
+    component "InternalEntry" as internalEntry
+  }
+
+  component "协议对象转换器\nProtocol Mapper" as protocolMapper
+  component "统一内部结构\nCanonicalMetadata" as canonical #FFF1F1
+
+  gravApi --> gravEntry
+  iceApi --> iceEntry
+  internalApi --> internalEntry
+
   abstractEntry <|-- gravEntry
   abstractEntry <|-- iceEntry
-  abstractEntry <|-- intEntry
+  abstractEntry <|-- internalEntry
+
+  gravEntry --> protocolMapper
+  iceEntry --> protocolMapper
+  internalEntry --> protocolMapper
+  protocolMapper --> canonical : 外部协议对象 → 内部结构
 }
 
-package "统一元数据内核" {
-  [模型映射与校验] as mapper
-  [自定义内部元数据模型\nCanonical Metadata Model] as model
-  [元数据命令服务] as command
-  [元数据查询服务] as query
-  [扩展属性注册表] as attrRegistry
+package "② OpenSearch 索引分类存储层" as layer2 #FFF8F0 {
+  component "IndexClassifier\n按 objectType、查询粒度、更新粒度分类" as classifier
+  component "IndexDocumentBuilder\n生成目标索引文档" as docBuilder
+  component "OpenSearch Writer\nBulk / Upsert / Delete" as osWriter
+
+  component "Dynamic Template Manager\n产品自定义查询 Key" as templateManager
+  component "Mapping Key Governance\n准入 / 类型 / 配额 / 硬上限 / 降级" as mappingGov
+
+  together {
+    database "结构导航索引\ncatalog / schema" as navIndexes
+    database "核心对象索引\ndataset / table" as coreIndexes
+    database "标签索引\ntags / tags-relation" as tagIndexes
+  }
+
+  classifier --> docBuilder
+  mappingGov --> templateManager
+  templateManager --> docBuilder : 受控字段映射
+  docBuilder --> osWriter
+  osWriter --> navIndexes
+  osWriter --> coreIndexes
+  osWriter --> tagIndexes
 }
 
-package "混合检索平面" {
-  [场景化 Query Planner] as planner
-  [索引路由器] as indexRouter
-  [动态模板管理器] as templateMgr
-  [Mapping Key 治理\n准入 / 配额 / 上限 / 降级] as mappingGov
-  [结果聚合与排序] as merger
-}
+package "③ 数据源工厂与下放层" as layer3 #F3FAF5 {
+  component "DataSourceType + Config" as sourceConfig
+  component "DataSourceFactory\n按数据源类型选择并创建" as factory
+  component "AbstractDataSource\n<<abstract>>\n统一数据源操作契约" as abstractDS
 
-package "六类索引" as sixIndexes {
-  database "catalog" as catalogIdx
-  database "schema" as schemaIdx
-  database "dataset" as datasetIdx
-  database "table" as tableIdx
-  database "tags" as tagsIdx
-  database "tags-relation" as relationIdx
-  catalogIdx -[hidden]right- schemaIdx
-  schemaIdx -[hidden]right- datasetIdx
-  datasetIdx -[hidden]right- tableIdx
-  tableIdx -[hidden]right- tagsIdx
-  tagsIdx -[hidden]right- relationIdx
-}
+  together {
+    component "StarRocksDataSource" as sr
+    component "IcebergDataSource" as iceberg
+    component "OpenSearchDataSource" as opensearch
+    component "其他 DataSource" as extension
+  }
 
-package "数据源工厂层" {
-  component "DataSourceFactory\ncreate(type, config)" as dsFactory
-  component "AbstractDataSource\n<<abstract>>\nread / write / batch" as abstractDS
-  component "StarRocksDataSource" as sr
-  component "IcebergDataSource" as ib
-  component "OpenSearchDataSource" as os
-
-  dsFactory --> abstractDS : 创建 / 返回
+  sourceConfig --> factory
+  factory --> abstractDS : create(type, config)
   abstractDS <|-- sr
-  abstractDS <|-- ib
-  abstractDS <|-- os
+  abstractDS <|-- iceberg
+  abstractDS <|-- opensearch
+  abstractDS <|-- extension
 }
 
-abstractEntry --> mapper : 模板方法统一入口流程
-mapper --> model
-model --> command
-model --> query
-command --> indexRouter : 变更事件
-query --> planner
-planner --> indexRouter
-indexRouter --> merger : 多索引结果
-merger --> query
+layer2 -[hidden]right- layer3
 
-attrRegistry --> templateMgr
-templateMgr --> mappingGov
-mappingGov --> indexRouter
-
-indexRouter --> catalogIdx : 层级导航 / 精确查询
-indexRouter --> schemaIdx : 层级导航 / 精确查询
-indexRouter --> datasetIdx : 精确 / 文本 / 全文 / 向量(可选)
-indexRouter --> tableIdx : 精确 / 文本 / 全文 / 向量(可选)
-indexRouter --> tagsIdx : 标签 key/value 内容
-indexRouter --> relationIdx : objectId ↔ tagId 关系
-
-command --> dsFactory : 获取写入数据源
-query --> dsFactory : 获取查询 / 回源数据源
-indexRouter --> dsFactory : 获取索引数据源
-sixIndexes ..> os : 在线索引实例
-
-note left of abstractEntry
-不同生态复用统一入口骨架；
-子类只实现生态差异点，
-公共入口约束与可复用逻辑在抽象类中收敛。
-end note
-
-note right of dsFactory
-工厂类负责按类型和配置选择、创建数据源；
-业务层不直接 new StarRocks / Iceberg / OpenSearch 实现。
-end note
-
-note right of mappingGov
-热 Key：经准入后提升为独立 Mapping 字段
-冷/未知 Key：落入固定 schema 的 KV 结构
-每产品、每索引限制 Key 数量，达到上限后停止扩展
-end note
+canonical --> classifier : 索引路径\n分类写入 OpenSearch
+canonical --> factory : 数据下放路径\n按 sourceType 选择数据源
 @enduml
