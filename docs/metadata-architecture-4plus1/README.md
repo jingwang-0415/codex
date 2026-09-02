@@ -2,6 +2,8 @@
 
 当前阶段仅维护可编辑的 PlantUML 源文件及对应 SVG 预览。架构最终确认后再制作演示文稿。
 
+取得真实代码仓并在新会话继续前，请先阅读 [NEXT_SESSION_HANDOFF.md](NEXT_SESSION_HANDOFF.md)。当前视图是需求层概念草图，后续应依据真实代码证据重新绘制。
+
 ## 视图清单
 
 | 4+1 视图 | PlantUML 源文件 | SVG 预览 |
