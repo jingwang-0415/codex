@@ -3,6 +3,8 @@
 > 核对日期：2026-10-26。源码基线：Apache Spark 3.5.6，经典 SparkSession 路径。
 > 本文讨论普通批处理 SQL、表、逻辑视图与常见血缘采集方式。Spark Connect、流处理以及厂商扩展需要结合各自实现验证。
 
+**阅读重点：第 3.3–3.8 节逐步展示“从计划对象生成血缘”；第 5.4 节给出 OpenLineage 真正负责生成血缘的源码；第 8.4 节附有本次实测代码、计划、JSON 和检查结果。**
+
 ## 1. 先回答最关心的问题
 
 **同一个 SparkSession 中，多次调用 `spark.sql(...)`，通常分别解析和分析各自的 SQL，形成各自的查询计划。Spark 核心不会仅因为这些 SQL 属于同一个 Session，就自动把它们拼成一张长期保存的表血缘图。**
@@ -92,6 +94,204 @@ A.price、A.quantity     → B.amount
 `A.status` 决定哪些记录进入结果，但不是 `B.amount` 数值表达式的直接输入。因此，字段血缘模型应区分“参与计算字段值”和“通过过滤、连接等影响结果”。不同采集器的展示口径可能不同。
 
 OpenLineage 的 Spark 字段血缘实现会遍历逻辑计划，利用表达式的 `ExprId` 追踪输入、输出和表达式依赖，并区分直接、间接影响。这里介绍的是 **OpenLineage 如何提取字段血缘**，不代表 Spark 核心内置了相同的治理血缘输出接口。[来源：OpenLineage 字段血缘][ol-column]
+
+### 3.3 血缘真正是在什么地方“生成”的？
+
+**对表级、字段级治理血缘来说，关键步骤是采集器把 Spark 的计划对象转换成“数据集、字段、运行、依赖边”等元数据。** 只打印 `EXPLAIN`，还没有完成这个转换。
+
+完整过程可表达为：
+
+```mermaid
+flowchart TD
+    SQL[SQL 文本] --> PLAN[Spark 解析和分析后的计划对象]
+    PLAN --> READ[识别输入 Relation]
+    PLAN --> WRITE[识别写入命令和目标表]
+    PLAN --> EXPR[追踪 Project 与 Filter 的字段引用]
+    READ --> META[组织输入 输出和字段依赖元数据]
+    WRITE --> META
+    EXPR --> META
+    META --> EVENT[关联执行状态并生成血缘事件]
+    EVENT --> STORE[发送和持久化]
+    STORE --> GRAPH[按数据集身份连接并展示血缘图]
+```
+
+其中，Spark 提供查询计划和执行机制；采集器负责理解计划、生成元数据；血缘后端负责保存和关联。正式采集器可以根据需要读取分析计划、优化计划或执行相关节点，并补偿缓存等情况。本文最小示例读取 `analyzed()`，用于清楚展示依赖提取。
+
+### 3.4 用一个实际运行的 SQL 看原始材料
+
+本次实验的源表 A 包含 `id、price、quantity、status`，目标表 B 包含 `biz_id、amount`。实际执行的 SQL 为：
+
+```sql
+INSERT INTO B
+SELECT id AS biz_id, price * quantity AS amount
+FROM A
+WHERE status = 'paid';
+```
+
+下面根据本次[原始分析计划](evidence/R1-analyzed-plan.txt)缩短了数据库限定名，并省略文件路径等信息；`#8` 等数字来自此次运行：
+
+```text
+InsertIntoHadoopFsRelationCommand ... 目标表 B ... [biz_id, amount]
++- Project [id#8 AS biz_id#4, (price#9 * quantity#10) AS amount#5]
+   +- Filter (status#11 = paid)
+      +- SubqueryAlias A
+         +- Relation A[id#8,price#9,quantity#10,status#11] parquet
+```
+
+这棵树已经包含了生成血缘需要的三类信息：
+
+| 信息 | 从哪里取 | 此次取到的值 |
+| --- | --- | --- |
+| 输入数据集及输入字段 | `LogicalRelation.catalogTable()`、`output()` | A；`id#8、price#9、quantity#10、status#11` |
+| 输出数据集 | 写入命令的 `catalogTable()` | B |
+| 输出字段的来源 | 查询输出、`Project.projectList()` 及表达式引用 | `biz_id#4` 引用 `id#8`；`amount#5` 引用 `price#9、quantity#10` |
+| 结果行的筛选条件 | `Filter.condition()` 及其引用 | `status#11 = 'paid'` |
+
+目标表是从实际写入节点取得的，源表是从读取关系取得的；不是通过字符串里出现了 A、B 两个名称就直接连线。
+
+### 3.5 第一步：生成表级依赖边
+
+在这个单目标、单输入的示例中：
+
+```text
+输入 Relation  → 输入数据集 A
+写入 Command   → 输出数据集 B
+同一次写入     → 建立直接表依赖 A → B
+```
+
+对应最小示例的关键代码如下。`analyzed` 是实际的 JVM 计划对象；`dataset_name` 从表元数据取得限定名：
+
+```python
+target = dataset_name(analyzed.catalogTable().get())
+query = analyzed.query()
+
+# 遍历 query，遇到 LogicalRelation 时：
+source = dataset_name(node.catalogTable().get())
+inputs.add(source)
+
+# 当前写入完成后，形成可保存的边：
+table_edges = [{"from": source, "to": target} for source in sorted(inputs)]
+```
+
+这段代码是便于说明的摘录，完整可运行版本见 [generate_lineage_demo.py](generate_lineage_demo.py)。对于分区写入、多目标写入、Merge、不同 Catalog 和数据源，必须采用相应规则，不能把上述单表例子直接当成通用算法。
+
+如果只是 `SELECT * FROM A`，仍能提取查询输入 A，但没有“写入普通表 B”的节点，因而不能凭空生成 `A → B`。后端可以另外保留“A 被某次查询读取”的运行关系。
+
+### 3.6 第二步：通过表达式引用生成字段依赖
+
+采集器先建立“表达式身份到源字段”的映射：
+
+```text
+#8  → A.id
+#9  → A.price
+#10 → A.quantity
+#11 → A.status
+```
+
+再读 Project 中每个表达式的引用，得到“输出表达式到输入表达式”的映射：
+
+```text
+biz_id#4 → id#8
+amount#5 → price#9、quantity#10
+```
+
+最后，结合当前写入的目标列映射，把查询输出关联到 B 的字段：
+
+```text
+B.biz_id → 查询输出 biz_id#4 → id#8                → A.id
+B.amount → 查询输出 amount#5 → price#9、quantity#10 → A.price、A.quantity
+```
+
+按“上游指向下游”的展示方向，就是：
+
+```mermaid
+flowchart LR
+    ID[A.id] --> BID[B.biz_id]
+    PRICE[A.price] --> AMOUNT[B.amount]
+    QTY[A.quantity] --> AMOUNT
+    STATUS[A.status] -. 过滤影响 .-> BID
+    STATUS -. 过滤影响 .-> AMOUNT
+```
+
+本次最小示例读取实际表达式对象的关键代码为：
+
+```python
+for expression in scala_seq(node.projectList()):
+    output_id = expr_id(expression.toAttribute())
+    refs = {
+        expr_id(attr)
+        for attr in scala_seq(expression.references().toSeq())
+    }
+    if refs != {output_id}:
+        dependencies.setdefault(output_id, set()).update(refs)
+```
+
+字段被改名为 `biz_id` 仍能追溯到 `A.id`，因为连接依据是表达式引用，不是两个字段名相同。遇到多层别名或 Cast，继续沿表达式依赖向上追踪，直到源表字段。
+
+**注意：`ExprId` 用于当前计划中的表达式连接，不是跨任务的数据集或字段永久 ID。** 上面只显示了数字部分以便阅读；示例代码实际保留了 `ExprId` 中的 JVM UUID。跨 SQL 拼接时应使用统一的数据集和字段身份。
+
+目标列的对齐也不能一律按名称猜测。本次 INSERT 的分析计划已经完成目标列与查询输出的对齐，最小示例将完整目标 schema 按位置与最终查询输出对应。其他写入变体必须按各自语义处理。
+
+### 3.7 第三步：将过滤影响与数值来源分开保存
+
+`amount` 的数值由 `price * quantity` 计算；`status` 控制某行是否被写入。这两种依赖需要分别表达。
+
+示例读取 `Filter.condition().references()`，得到 `status#11`，再解析回 `A.status`。生成的教学 JSON 使用 `inputFields` 表示字段值来源，使用自定义的 `rowInfluences` 表示过滤影响。
+
+下面是[本次生成的 R1 JSON](evidence/R1-lineage.json)的简化版，省略了实验数据库限定名与追踪信息：
+
+```json
+{
+  "runId": "R1",
+  "status": "COMPLETE",
+  "inputs": ["A"],
+  "output": "B",
+  "tableEdges": [{"from": "A", "to": "B"}],
+  "columnLineage": {
+    "biz_id": {
+      "inputFields": [{"dataset": "A", "field": "id"}],
+      "rowInfluences": [{"dataset": "A", "field": "status"}]
+    },
+    "amount": {
+      "inputFields": [
+        {"dataset": "A", "field": "price"},
+        {"dataset": "A", "field": "quantity"}
+      ],
+      "rowInfluences": [{"dataset": "A", "field": "status"}]
+    }
+  }
+}
+```
+
+**至此，依赖已经从 Spark 计划转换成可以保存和展示的血缘元数据。** 这份 JSON 是本文教学程序定义的格式，不是 Spark 的原生返回，也不是完整的 OpenLineage 标准事件。
+
+### 3.8 第四步：连接不同 SQL 生成的血缘记录
+
+再运行：
+
+```sql
+INSERT INTO C
+SELECT biz_id, amount * 2 FROM B;
+```
+
+此时 C 的 schema 为 `customer_key、final_amount`。本次实际分析计划还包含了 Spark 为目标列对齐而增加的别名和 Cast，详见 [R2 原始计划](evidence/R2-analyzed-plan.txt)。采集器沿这些表达式继续追溯，得到：
+
+```text
+表依赖：B → C
+字段值来源：B.biz_id → C.customer_key
+            B.amount → C.final_amount
+```
+
+将两次记录按持久化的“数据集 + 字段”身份连接：
+
+```text
+R1：A.price、A.quantity → B.amount
+R2：B.amount            → C.final_amount
+                         ↓ 拼接
+    A.price、A.quantity → B.amount → C.final_amount
+```
+
+这里 `A → B` 和 `B → C` 是直接依赖，A 对 C 的关系是沿图遍历得到的传递依赖；不能把二者混称为同一条 SQL 直接产生的边。该示例只演示字段值来源的传递，跨运行的过滤条件、版本及分区影响需要额外模型。
 
 ## 4. 多条 SQL 的场景对照
 
@@ -184,6 +384,29 @@ spark.sql(sqlText)
               └─ analyzer.executeAndCheck(logical, tracker)
 ```
 
+### 5.4 接下来谁把计划转换成治理血缘？看 OpenLineage 实现
+
+前面几节定位的是 Spark 生成计划的入口。真正解释“生成血缘”的代码，还需要看采集器。下面固定到 **OpenLineage 1.54.0** 的官方源码：
+
+| 步骤 | 实际类或方法 | 做了什么 |
+| --- | --- | --- |
+| 接收执行事件 | [OpenLineageSparkListener.onOtherEvent][ol-src-listener] | 处理 SQL 执行开始、结束事件，进入相应执行上下文 |
+| 建立输入与输出 | [OpenLineageRunEventBuilder.buildRun][ol-src-event] | 分别构造输入数据集、输出数据集，并放入运行事件 |
+| 取得写入目标 | [InsertIntoHadoopFsRelationVisitor][ol-src-write] | 识别对应写入命令，从 Catalog 表或输出路径构造输出数据集 |
+| 记录源字段身份 | [InputFieldsCollector.extractInternalInputs][ol-src-inputs] | 将输入 Attribute 的 `ExprId`、数据集身份和字段名放入 Builder |
+| 记录输出表达式 | [OutputFieldsCollector.collect][ol-src-outputs] | 收集输出字段及其表达式身份 |
+| 遍历投影 | [ProjectVisitor.apply][ol-src-project] | 遍历 Project 的表达式，并进入表达式遍历器 |
+| 沿别名继续追踪 | [AliasVisitor.apply][ol-src-alias] | 继续处理 Alias 的子表达式 |
+| 记录过滤依赖 | [FilterVisitor.apply][ol-src-filter] | 将过滤条件注册为数据集依赖，并标为间接过滤影响 |
+| 连接表达式引用 | [ExpressionTraverser][ol-src-traverser] | 访问表达式和子表达式，向 Builder 添加依赖 |
+| 解析到源字段 | [ColumnLevelLineageBuilder][ol-src-builder] | 从输出表达式向上查找依赖，并映射回输入数据集字段 |
+| 生成字段血缘结构 | [ColumnLevelLineageUtils][ol-src-utils] | 组织输出、输入和表达式依赖，生成 `columnLineage` facet |
+| 把字段血缘附到输出上 | [OpenLineageRunEventBuilder.buildOutputDatasets][ol-src-attach] | 将 `columnLineage` 放到输出数据集的 facets 中 |
+
+它不是只执行了 `parsePlan` 就自动拥有一张治理血缘图，而是继续做了**识别输入输出、收集字段身份、追踪表达式、构造事件**这些工作。
+
+这里的最小程序为教学实现，没有安装或实际运行 OpenLineage Agent。本节源码阅读展示正式项目的实现方式；第 8.4 节实测的是本文最小提取器，两者不能混为同一份运行结果。
+
 ## 6. 官方源码证据：普通表与视图的解析边界
 
 ### 6.1 普通表解析为表关系
@@ -247,9 +470,11 @@ df2.explain(mode="extended")
 - 目标环境：本地经典 PySpark 3.5.6；建议使用 Python 3.11、JDK 17。
 - 需要本地 Spark 可写的临时目录，无需业务表或真实数据。
 - 示例创建唯一名称的实验数据库和临时视图，避免覆盖已有对象。
-- 本文已核对源码、文档链接及示例 Python 语法；**下面示例未在本次环境中运行，不将预期计划作为实测输出。**
+- 本次已在 Spark 3.5.6、Python 3.11.15、JDK 17.0.21 上运行第 8.2 节示例，数据校验通过；第 8.4 节另外运行了真正输出血缘元数据的提取器，并提供原始证据。
 
 ### 8.2 完整 Python 示例
+
+也可直接使用 [verify_spark_lineage.py](verify_spark_lineage.py)。
 
 将下列代码保存为 `verify_spark_lineage.py`，在已安装 PySpark 3.5.6 并配置 JDK 17 的环境运行：
 
@@ -348,6 +573,54 @@ if __name__ == "__main__":
 
 尤其不要只检查打印文本中是否出现字符 `A`：SQL 文本、路径、别名等都可能包含相同字符，应确认它是不是对应的输入关系节点。
 
+### 8.4 真正生成血缘的可运行代码与实测结果
+
+完整脚本：[generate_lineage_demo.py](generate_lineage_demo.py)。
+
+它与第 8.2 节的区别是：第 8.2 节主要观察 `EXPLAIN`；这个脚本**直接访问 Catalyst 的实际对象、遍历节点并生成血缘 JSON**。没有对 `EXPLAIN` 文本做正则解析，也没有预先手写 `A → B` 的结果。
+
+在配置好 JDK 17 的独立 Python 3.11 环境中，可执行：
+
+```sh
+python -m pip install pyspark==3.5.6
+python generate_lineage_demo.py --output-dir evidence
+```
+
+脚本会创建唯一名称的本地实验数据库，以合成数据执行写入；调用 `collect()` 确认本次执行成功后，才记录 `COMPLETE` 并读取 `queryExecution().analyzed()`。它随后完成：
+
+1. 遍历 `LogicalRelation`，提取源表与源字段身份。
+2. 读取 `InsertIntoHadoopFsRelationCommand`，取得目标表及查询子计划。
+3. 遍历 `Project`，记录每个表达式引用的上游 Attribute。
+4. 遍历 `Filter`，单独记录对结果行的影响。
+5. 从输出表达式追溯到源字段，生成 JSON 与表级边。
+6. 按数据集及字段身份连接 R1、R2，验证传递血缘。
+
+本次生成的证据：
+
+| 文件 | 内容 |
+| --- | --- |
+| [summary.json](evidence/summary.json) | 运行版本、9 项检查结果，以及拼接后的表级、字段级来源 |
+| [R1-analyzed-plan.txt](evidence/R1-analyzed-plan.txt) | A 写入 B 的实际分析计划 |
+| [R1-lineage.json](evidence/R1-lineage.json) | 从计划提取的 `A → B`、字段来源、过滤影响及表达式追踪 |
+| [R2-analyzed-plan.txt](evidence/R2-analyzed-plan.txt) | B 写入 C 的实际分析计划 |
+| [R2-lineage.json](evidence/R2-lineage.json) | 从第二条计划提取的 `B → C` 与字段来源 |
+| [read-a-lineage.json](evidence/read-a-lineage.json) | 独立查询 A：有输入，无持久化目标表边 |
+| [read-b-lineage.json](evidence/read-b-lineage.json) | 独立查询 B：有输入，无持久化目标表边 |
+| [view-write-analyzed-plan.txt](evidence/view-write-analyzed-plan.txt) | 查询临时视图并写入 D：当前计划展开到 A |
+| [view-write-lineage.json](evidence/view-write-lineage.json) | 通过视图提取出的 `A → D` 以及字段依赖 |
+
+检查结果均通过：表级边提取、改名字段追溯、乘法表达式的两个输入、过滤影响区分、独立读取不产生表到表边、第二次写入止于落地 B、临时视图展开、跨 SQL 表和字段依赖拼接、最终数据正确性。
+
+最终数据为 `C = [(1, 40), (3, 56)]`。实测拼接得到 `A → B → C`，并识别出 `C.final_amount` 的上游数值来源为 `A.price、A.quantity`。
+
+### 8.5 示例实现的明确边界
+
+这是一个便于阅读、已经运行验证的最小提取器，使用 Spark 内部 JVM 接口，固定于 3.5.6；不是通用生产血缘 SDK。
+
+它只支持示例中的 V1、非分区 Parquet 命名表写入，以及 `Project、Filter、SubqueryAlias、View、LogicalRelation`。遇到其他节点会直接报错，避免默默输出不完整血缘；Join、Aggregate、CTE、Merge、V2 数据源、缓存、Spark Connect 等都需要补充规则。
+
+`rowInfluences`、`tableEdges` 等字段是教学 JSON 的设计。正式接入 OpenLineage 时，应按其事件和 facet 规范编码，并处理执行失败、事件发送、重试、身份规范化与后端存储。本文实测证明的是**该范围内从真实计划提取血缘并连接记录**，未验证 OpenLineage 服务端接收或图形界面展示。
+
 ## 9. 血缘平台如何连接跨 SQL、跨应用链路
 
 ### 9.1 采集的是每次执行的输入与输出
@@ -431,6 +704,11 @@ Databricks Unity Catalog 提供运行时血缘采集与聚合能力。官方文�
 | D4 | [Spark 数据源 CREATE TABLE 文档][table-doc] | 普通表与 CTAS 语法 |
 | O1 | [OpenLineage Spark 集成][ol-spark] | 通过监听与依赖图提取元数据 |
 | O2 | [OpenLineage 字段级血缘][ol-column] | 表达式依赖提取与直接、间接影响 |
+| O3 | [OpenLineage 运行事件 Builder][ol-src-event] | 将输入、输出元数据组织为运行事件 |
+| O4 | [OpenLineage 写入节点 Visitor][ol-src-write] | 从写入命令识别目标数据集 |
+| O5 | [OpenLineage 输入字段 Collector][ol-src-inputs] | 将源字段与表达式身份连接 |
+| O6 | [OpenLineage Project Visitor][ol-src-project] | 追踪输出表达式 |
+| O7 | [OpenLineage 字段血缘 Builder][ol-src-builder] | 由输出表达式解析最终输入字段 |
 | P1 | [Databricks Unity Catalog 数据血缘][dbx-lineage] | 平台自动采集和聚合血缘的能力与边界 |
 
 源码片段仅用于解释机制；完整实现与许可证见 Apache Spark 官方仓库。Spark 其他版本应检查对应标签及实际运行环境，不能把这里的行号直接套用到最新分支。
@@ -449,3 +727,15 @@ Databricks Unity Catalog 提供运行时血缘采集与聚合能力。官方文�
 [ol-spark]: https://openlineage.io/docs/integrations/spark/
 [ol-column]: https://openlineage.io/docs/integrations/spark/spark_column_lineage/
 [dbx-lineage]: https://docs.databricks.com/aws/en/data-governance/unity-catalog/data-lineage
+[ol-src-listener]: https://github.com/OpenLineage/OpenLineage/blob/1.54.0/integration/spark/app/src/main/java/io/openlineage/spark/agent/OpenLineageSparkListener.java#L143-L156
+[ol-src-event]: https://github.com/OpenLineage/OpenLineage/blob/1.54.0/integration/spark/shared/src/main/java/io/openlineage/spark/agent/lifecycle/OpenLineageRunEventBuilder.java#L223-L250
+[ol-src-write]: https://github.com/OpenLineage/OpenLineage/blob/1.54.0/integration/spark/shared/src/main/java/io/openlineage/spark/agent/lifecycle/plan/InsertIntoHadoopFsRelationVisitor.java#L32-L71
+[ol-src-inputs]: https://github.com/OpenLineage/OpenLineage/blob/1.54.0/integration/spark/spark3/src/main/java/io/openlineage/spark3/agent/lifecycle/plan/column/InputFieldsCollector.java#L111-L124
+[ol-src-outputs]: https://github.com/OpenLineage/OpenLineage/blob/1.54.0/integration/spark/spark3/src/main/java/io/openlineage/spark3/agent/lifecycle/plan/column/OutputFieldsCollector.java#L25-L35
+[ol-src-project]: https://github.com/OpenLineage/OpenLineage/blob/1.54.0/integration/spark/spark3/src/main/java/io/openlineage/spark3/agent/lifecycle/plan/column/visitors/operator/ProjectVisitor.java#L23-L35
+[ol-src-alias]: https://github.com/OpenLineage/OpenLineage/blob/1.54.0/integration/spark/spark3/src/main/java/io/openlineage/spark3/agent/lifecycle/plan/column/visitors/expression/AliasVisitor.java#L25-L28
+[ol-src-filter]: https://github.com/OpenLineage/OpenLineage/blob/1.54.0/integration/spark/spark3/src/main/java/io/openlineage/spark3/agent/lifecycle/plan/column/visitors/operator/FilterVisitor.java#L33-L46
+[ol-src-traverser]: https://github.com/OpenLineage/OpenLineage/blob/1.54.0/integration/spark/spark3/src/main/java/io/openlineage/spark3/agent/lifecycle/plan/column/ExpressionTraverser.java#L121-L158
+[ol-src-builder]: https://github.com/OpenLineage/OpenLineage/blob/1.54.0/integration/spark/shared/src/main/java/io/openlineage/spark/agent/lifecycle/plan/column/ColumnLevelLineageBuilder.java#L303-L358
+[ol-src-utils]: https://github.com/OpenLineage/OpenLineage/blob/1.54.0/integration/spark/spark3/src/main/java/io/openlineage/spark3/agent/lifecycle/plan/column/ColumnLevelLineageUtils.java#L41-L77
+[ol-src-attach]: https://github.com/OpenLineage/OpenLineage/blob/1.54.0/integration/spark/shared/src/main/java/io/openlineage/spark/agent/lifecycle/OpenLineageRunEventBuilder.java#L401-L421

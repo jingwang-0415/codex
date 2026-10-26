@@ -1,0 +1,32 @@
+{
+  "runId": "read-a",
+  "status": "COMPLETE",
+  "inputs": [
+    "spark_catalog.lineage_generation_lab_82864f37f2.a"
+  ],
+  "output": null,
+  "tableEdges": [],
+  "columnLineage": {},
+  "trace": {
+    "inputAttributes": {
+      "ExprId(10,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)": {
+        "dataset": "spark_catalog.lineage_generation_lab_82864f37f2.a",
+        "field": "quantity"
+      },
+      "ExprId(11,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)": {
+        "dataset": "spark_catalog.lineage_generation_lab_82864f37f2.a",
+        "field": "status"
+      },
+      "ExprId(8,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)": {
+        "dataset": "spark_catalog.lineage_generation_lab_82864f37f2.a",
+        "field": "id"
+      },
+      "ExprId(9,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)": {
+        "dataset": "spark_catalog.lineage_generation_lab_82864f37f2.a",
+        "field": "price"
+      }
+    },
+    "aliases": [],
+    "filters": []
+  }
+}

@@ -1,0 +1,95 @@
+{
+  "runId": "R1",
+  "status": "COMPLETE",
+  "inputs": [
+    "spark_catalog.lineage_generation_lab_82864f37f2.a"
+  ],
+  "output": "spark_catalog.lineage_generation_lab_82864f37f2.b",
+  "tableEdges": [
+    {
+      "from": "spark_catalog.lineage_generation_lab_82864f37f2.a",
+      "to": "spark_catalog.lineage_generation_lab_82864f37f2.b"
+    }
+  ],
+  "columnLineage": {
+    "biz_id": {
+      "inputFields": [
+        {
+          "dataset": "spark_catalog.lineage_generation_lab_82864f37f2.a",
+          "field": "id"
+        }
+      ],
+      "rowInfluences": [
+        {
+          "dataset": "spark_catalog.lineage_generation_lab_82864f37f2.a",
+          "field": "status"
+        }
+      ]
+    },
+    "amount": {
+      "inputFields": [
+        {
+          "dataset": "spark_catalog.lineage_generation_lab_82864f37f2.a",
+          "field": "price"
+        },
+        {
+          "dataset": "spark_catalog.lineage_generation_lab_82864f37f2.a",
+          "field": "quantity"
+        }
+      ],
+      "rowInfluences": [
+        {
+          "dataset": "spark_catalog.lineage_generation_lab_82864f37f2.a",
+          "field": "status"
+        }
+      ]
+    }
+  },
+  "trace": {
+    "inputAttributes": {
+      "ExprId(10,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)": {
+        "dataset": "spark_catalog.lineage_generation_lab_82864f37f2.a",
+        "field": "quantity"
+      },
+      "ExprId(11,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)": {
+        "dataset": "spark_catalog.lineage_generation_lab_82864f37f2.a",
+        "field": "status"
+      },
+      "ExprId(8,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)": {
+        "dataset": "spark_catalog.lineage_generation_lab_82864f37f2.a",
+        "field": "id"
+      },
+      "ExprId(9,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)": {
+        "dataset": "spark_catalog.lineage_generation_lab_82864f37f2.a",
+        "field": "price"
+      }
+    },
+    "aliases": [
+      {
+        "output": "biz_id",
+        "exprId": "ExprId(4,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)",
+        "references": [
+          "ExprId(8,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)"
+        ],
+        "expression": "spark_catalog.lineage_generation_lab_82864f37f2.a.id AS biz_id"
+      },
+      {
+        "output": "amount",
+        "exprId": "ExprId(5,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)",
+        "references": [
+          "ExprId(10,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)",
+          "ExprId(9,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)"
+        ],
+        "expression": "(spark_catalog.lineage_generation_lab_82864f37f2.a.price * spark_catalog.lineage_generation_lab_82864f37f2.a.quantity) AS amount"
+      }
+    ],
+    "filters": [
+      {
+        "expression": "(spark_catalog.lineage_generation_lab_82864f37f2.a.status = 'paid')",
+        "references": [
+          "ExprId(11,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)"
+        ]
+      }
+    ]
+  }
+}

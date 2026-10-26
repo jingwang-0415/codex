@@ -1,0 +1,73 @@
+{
+  "runId": "R2",
+  "status": "COMPLETE",
+  "inputs": [
+    "spark_catalog.lineage_generation_lab_82864f37f2.b"
+  ],
+  "output": "spark_catalog.lineage_generation_lab_82864f37f2.c",
+  "tableEdges": [
+    {
+      "from": "spark_catalog.lineage_generation_lab_82864f37f2.b",
+      "to": "spark_catalog.lineage_generation_lab_82864f37f2.c"
+    }
+  ],
+  "columnLineage": {
+    "customer_key": {
+      "inputFields": [
+        {
+          "dataset": "spark_catalog.lineage_generation_lab_82864f37f2.b",
+          "field": "biz_id"
+        }
+      ],
+      "rowInfluences": []
+    },
+    "final_amount": {
+      "inputFields": [
+        {
+          "dataset": "spark_catalog.lineage_generation_lab_82864f37f2.b",
+          "field": "amount"
+        }
+      ],
+      "rowInfluences": []
+    }
+  },
+  "trace": {
+    "inputAttributes": {
+      "ExprId(15,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)": {
+        "dataset": "spark_catalog.lineage_generation_lab_82864f37f2.b",
+        "field": "biz_id"
+      },
+      "ExprId(16,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)": {
+        "dataset": "spark_catalog.lineage_generation_lab_82864f37f2.b",
+        "field": "amount"
+      }
+    },
+    "aliases": [
+      {
+        "output": "(amount * 2)",
+        "exprId": "ExprId(17,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)",
+        "references": [
+          "ExprId(16,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)"
+        ],
+        "expression": "(spark_catalog.lineage_generation_lab_82864f37f2.b.amount * 2) AS `(amount * 2)`"
+      },
+      {
+        "output": "customer_key",
+        "exprId": "ExprId(19,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)",
+        "references": [
+          "ExprId(15,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)"
+        ],
+        "expression": "CAST(spark_catalog.lineage_generation_lab_82864f37f2.b.biz_id AS INT) AS customer_key"
+      },
+      {
+        "output": "final_amount",
+        "exprId": "ExprId(20,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)",
+        "references": [
+          "ExprId(17,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)"
+        ],
+        "expression": "CAST(`(amount * 2)` AS INT) AS final_amount"
+      }
+    ],
+    "filters": []
+  }
+}

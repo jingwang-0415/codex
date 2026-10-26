@@ -1,0 +1,24 @@
+{
+  "runId": "read-b",
+  "status": "COMPLETE",
+  "inputs": [
+    "spark_catalog.lineage_generation_lab_82864f37f2.b"
+  ],
+  "output": null,
+  "tableEdges": [],
+  "columnLineage": {},
+  "trace": {
+    "inputAttributes": {
+      "ExprId(15,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)": {
+        "dataset": "spark_catalog.lineage_generation_lab_82864f37f2.b",
+        "field": "biz_id"
+      },
+      "ExprId(16,ee2f5859-a0c9-46a3-9598-a4f6f7ffbfd2)": {
+        "dataset": "spark_catalog.lineage_generation_lab_82864f37f2.b",
+        "field": "amount"
+      }
+    },
+    "aliases": [],
+    "filters": []
+  }
+}

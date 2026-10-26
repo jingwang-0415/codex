@@ -1,0 +1,3 @@
+Project [id#8]
++- SubqueryAlias spark_catalog.lineage_generation_lab_82864f37f2.a
+   +- Relation spark_catalog.lineage_generation_lab_82864f37f2.a[id#8,price#9,quantity#10,status#11] parquet

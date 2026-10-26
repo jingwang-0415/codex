@@ -1,0 +1,37 @@
+{
+  "sparkVersion": "3.5.6",
+  "pythonVersion": "3.11.15",
+  "javaVersion": "17.0.21",
+  "database": "lineage_generation_lab_82864f37f2",
+  "checks": {
+    "table_edges_from_write_plans": true,
+    "renamed_column_resolves_to_source": true,
+    "expression_has_two_inputs": true,
+    "filter_is_separate_row_influence": true,
+    "independent_reads_create_no_table_edge": true,
+    "second_write_starts_at_materialized_b": true,
+    "temp_view_expands_to_a": true,
+    "composed_table_and_column_edges": true,
+    "output_data_correct": true
+  },
+  "tableEdges": [
+    {
+      "from": "spark_catalog.lineage_generation_lab_82864f37f2.a",
+      "to": "spark_catalog.lineage_generation_lab_82864f37f2.b"
+    },
+    {
+      "from": "spark_catalog.lineage_generation_lab_82864f37f2.b",
+      "to": "spark_catalog.lineage_generation_lab_82864f37f2.c"
+    }
+  ],
+  "composedValueSourcesForCFinalAmount": [
+    {
+      "dataset": "spark_catalog.lineage_generation_lab_82864f37f2.a",
+      "field": "price"
+    },
+    {
+      "dataset": "spark_catalog.lineage_generation_lab_82864f37f2.a",
+      "field": "quantity"
+    }
+  ]
+}

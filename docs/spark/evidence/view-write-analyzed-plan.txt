@@ -1,0 +1,9 @@
+InsertIntoHadoopFsRelationCommand file:/tmp/spark-lineage-demo-3uij3ije/lineage_generation_lab_82864f37f2.db/d, false, Parquet, [path=file:/tmp/spark-lineage-demo-3uij3ije/lineage_generation_lab_82864f37f2.db/d], Append, `spark_catalog`.`lineage_generation_lab_82864f37f2`.`d`, org.apache.spark.sql.execution.datasources.InMemoryFileIndex(file:/tmp/spark-lineage-demo-3uij3ije/lineage_generation_lab_82864f37f2.db/d), [biz_id, amount]
++- Project [biz_id#27, amount#28]
+   +- SubqueryAlias lineage_v_064d8786
+      +- View (`lineage_v_064d8786`, [biz_id#27,amount#28])
+         +- Project [cast(biz_id#25 as int) AS biz_id#27, cast(amount#26 as int) AS amount#28]
+            +- Project [id#8 AS biz_id#25, (price#9 * quantity#10) AS amount#26]
+               +- Filter (status#11 = paid)
+                  +- SubqueryAlias spark_catalog.lineage_generation_lab_82864f37f2.a
+                     +- Relation spark_catalog.lineage_generation_lab_82864f37f2.a[id#8,price#9,quantity#10,status#11] parquet
